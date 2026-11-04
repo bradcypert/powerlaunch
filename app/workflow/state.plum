@@ -1,0 +1,124 @@
+use library;
+use storage;
+
+// A confirmation owns its destination and always renders the editor beneath it.
+// There is no separate pending flag that can disagree with the active screen.
+pub enum Destination { CloseLauncher, ShowLibrary, AddGame, CancelEditor }
+pub enum Screen { LibraryScreen, DetailsScreen, EditorScreen, ConfirmScreen(Destination) }
+
+pub struct State {
+    pub lib: library.Library,
+    pub visible: Array[library.Game],
+    pub tags: Array[String],
+    pub draft: library.Game,
+    pub original: library.Game,
+    pub store: storage.Store,
+    pub query: String,
+    pub tag: String,
+    pub sort: Int,
+    pub dropdown: Int,
+    pub menu_scroll: Int,
+    pub favorites: Bool,
+    pub screen: Screen,
+    pub focus: Int,
+    pub selected: Int,
+    pub scroll: Int,
+    pub editor_scroll: Int,
+    pub artwork_source: String,
+    pub tags_text: String,
+    pub status: String,
+    pub removing: Bool,
+    pub missing: Bool,
+    pub quit: Bool,
+}
+
+
+pub let confirming (s: State): Bool = match s.screen { ConfirmScreen(_) => true, _ => false }
+pub let editing (s: State): Bool = s.screen == EditorScreen || confirming(s)
+pub let dirty (s: State): Bool = editing(s) && (s.draft != s.original || s.artwork_source != ""
+    || s.tags_text != Array.join(s.original.tags, ", "))
+
+pub let refresh (s: State): State = {
+    let tags = library.all_tags(s.lib);
+    let tag = if s.tag != "" && !Array.contains(tags, s.tag) { "" } else { s.tag };
+    State { visible: library.browse(s.lib, s.query, s.favorites, tag, s.sort),
+        tag: tag, tags: tags, selected: 0, scroll: 0, ..s }
+}
+
+pub let open_game (s: State) (game: library.Game) (missing: Bool): State = State {
+    draft: game, original: game, artwork_source: "", focus: 201, screen: DetailsScreen,
+    tags_text: Array.join(game.tags, ", "), status: "", removing: false,
+    missing: missing, editor_scroll: 0, dropdown: 0, ..s }
+
+let new_game (s: State): State = State {
+    draft: library.draft(()), original: library.draft(()), artwork_source: "",
+    tags_text: "", dropdown: 0, screen: EditorScreen, focus: 1, editor_scroll: 0, status: "", removing: false, ..s }
+
+let navigate (s: State) (destination: Destination): State = {
+    let clean = State { dropdown: 0, menu_scroll: 0, draft: s.original, artwork_source: "",
+        tags_text: Array.join(s.original.tags, ", "), status: "", ..s };
+    match destination {
+        CloseLauncher => State { quit: true, ..clean },
+        AddGame => new_game(clean),
+        CancelEditor => State { screen: if clean.draft.id == "" { LibraryScreen } else { DetailsScreen }, focus: 200, ..clean },
+        ShowLibrary => State { screen: LibraryScreen, focus: 300, ..clean },
+    }
+}
+
+pub let request (s: State) (destination: Destination): State =
+    if dirty(s) { State { screen: ConfirmScreen(destination), focus: 902, ..s } }
+    else { navigate(s, destination) }
+
+pub let discard (s: State): State = match s.screen {
+    ConfirmScreen(destination) => navigate(s, destination),
+    _ => s,
+}
+
+pub let keep_editing (s: State): State =
+    if confirming(s) { State { screen: EditorScreen, focus: 1, ..s } } else { s }
+
+// Called only after the store commits. Failed effects never change this state.
+pub let saved (s: State) (lib: library.Library) (game: library.Game) (missing: Bool): State =
+    refresh(State { lib: lib, draft: game, original: game, screen: DetailsScreen, focus: 201,
+        artwork_source: "", tags_text: Array.join(game.tags, ", "), status: "Changes saved.",
+        removing: false, missing: missing, ..s })
+
+pub let saved_and_continue (before: State) (saved: State): State = match before.screen {
+    ConfirmScreen(destination) => navigate(saved, destination),
+    _ => saved,
+}
+
+pub let initial (lib: library.Library) (store: storage.Store) (status: String): State =
+    State { lib: lib, visible: library.browse(lib, "", false, "", 0), tags: library.all_tags(lib),
+        draft: library.draft(()), original: library.draft(()), store: store, query: "", tag: "", sort: 0,
+        dropdown: 0, menu_scroll: 0, favorites: false, screen: LibraryScreen, focus: 300, selected: 0,
+        scroll: 0, editor_scroll: 0, artwork_source: "", tags_text: "", status: status,
+        removing: false, missing: false, quit: false }
+
+pub let test_unsaved_navigation_is_explicit_and_cancelable (): Unit = {
+    let base = initial(library.empty(()), storage.Store { root: "unused", writable: true }, "");
+    let editor = request(base, AddGame);
+    let changed = State { draft: library.Game { title: "Unsaved", ..editor.draft }, ..editor };
+    for destination in [CloseLauncher, ShowLibrary, AddGame, CancelEditor] {
+        let confirmation = request(changed, destination);
+        assert_eq(confirmation.screen, ConfirmScreen(destination));
+        assert(!confirmation.quit);
+        assert_eq(keep_editing(confirmation).draft.title, "Unsaved");
+        assert_eq(keep_editing(confirmation).screen, EditorScreen);
+    };
+    assert(discard(request(changed, CloseLauncher)).quit);
+    assert_eq(discard(request(changed, ShowLibrary)).screen, LibraryScreen);
+    assert_eq(discard(request(changed, AddGame)).draft, library.draft(()))
+}
+
+pub let test_successful_save_continues_requested_navigation (): Unit = {
+    let base = request(initial(library.empty(()), storage.Store { root: "unused", writable: true }, ""), AddGame);
+    let game = library.Game { id: "game-1", title: "Saved", target: "/game", ..base.draft };
+    let editing = State { draft: game, ..base };
+    let before = request(editing, CloseLauncher);
+    let lib = library.Library { games: [game], next_id: 2 };
+    let result = saved_and_continue(before, saved(before, lib, game, false));
+    assert(result.quit);
+    assert_eq(result.lib, lib);
+    assert_eq(result.original, game)
+}

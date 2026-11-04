@@ -14,6 +14,7 @@ void pl_windows_prepare(void);
 void pl_windows_style(void *window);
 #endif
 #include "icon_data.h"
+#include "typography.h"
 #define RAYGUI_IMPLEMENTATION
 #include "../vendor/raygui.h"
 
@@ -23,8 +24,9 @@ void pl_windows_style(void *window);
  * records and editor state remain Plum values, not retained C buffers. */
 static char field_buffer[FIELD_BYTES];
 static float scale = 1;
-static Font font;
-static int custom_font;
+static int activation_consumed;
+static int requested_cursor = MOUSE_CURSOR_DEFAULT;
+static int current_cursor = MOUSE_CURSOR_DEFAULT;
 static int frame;
 typedef struct { char *path; Texture2D image; unsigned int used; } Cover;
 static Cover covers[TEXTURES];
@@ -95,22 +97,7 @@ void pl_ui_init(void) {
         SetTextureFilter(logo, TEXTURE_FILTER_BILINEAR);
         UnloadImage(icon);
     }
-#ifdef _WIN32
-    const char *face = "C:/Windows/Fonts/segoeui.ttf";
-#elif defined(__APPLE__)
-    const char *face = "/System/Library/Fonts/Supplemental/Arial.ttf";
-#else
-    const char *face = "/usr/share/fonts/TTF/OpenSans-Regular.ttf";
-    if (!FileExists(face)) face = "/usr/share/fonts/TTF/DejaVuSans.ttf";
-    if (!FileExists(face)) face = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
-#endif
-    if (FileExists(face)) {
-        int codepoints[480];
-        for (int i = 0; i < 480; i++) codepoints[i] = 32 + i;
-        font = LoadFontEx(face, 40, codepoints, 480);
-        custom_font = font.texture.id != 0;
-        if (custom_font) { SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR); GuiSetFont(font); }
-    }
+    GuiSetFont(pl_font_init());
     GuiSetStyle(DEFAULT, TEXT_SIZE, 17);
     GuiSetStyle(DEFAULT, TEXT_SPACING, 0);
     GuiSetStyle(DEFAULT, BACKGROUND_COLOR, 0x171A23ff);
@@ -136,6 +123,8 @@ void pl_ui_begin(void) {
     if (override) scale = (float)atof(override);
     if (scale < 1) scale = 1;
     if (scale > 3) scale = 3;
+    activation_consumed = 0;
+    requested_cursor = MOUSE_CURSOR_DEFAULT;
     SetMouseScale(1 / scale, 1 / scale);
     BeginDrawing();
     ClearBackground(color(0x171A23));
@@ -143,6 +132,10 @@ void pl_ui_begin(void) {
     BeginMode2D(camera);
 }
 void pl_ui_end(void) {
+    if (requested_cursor != current_cursor) {
+        SetMouseCursor(requested_cursor);
+        current_cursor = requested_cursor;
+    }
     EndMode2D();
     EndDrawing();
     frame++;
@@ -157,7 +150,7 @@ void pl_ui_close(void) {
         covers[i] = (Cover){0};
     }
     if (logo.id) UnloadTexture(logo);
-    if (custom_font) UnloadFont(font);
+    pl_font_close();
     CloseWindow();
     if (getenv("POWERLAUNCH_MEMORY_REPORT"))
         fprintf(stderr, "[powerlaunch-native] peak_textures=%d peak_texture_bytes=%llu textures_after_close=0\n",
@@ -166,24 +159,31 @@ void pl_ui_close(void) {
 long long pl_ui_width(void) { return (long long)(GetScreenWidth() / scale); }
 long long pl_ui_height(void) { return (long long)(GetScreenHeight() / scale); }
 void pl_ui_enable(int enabled) { input_enabled = enabled; if (enabled) GuiEnable(); else GuiDisable(); }
-int pl_ui_key(long long key) { return input_enabled && IsKeyPressed((int)key); }
+void pl_ui_consume_activation(void) { activation_consumed = 1; }
+int pl_ui_key(long long key) {
+    return input_enabled && !(activation_consumed && (key == KEY_ENTER || key == KEY_SPACE))
+        && IsKeyPressed((int)key);
+}
 int pl_ui_down(long long key) { return input_enabled && IsKeyDown((int)key); }
 long long pl_ui_wheel(void) {
     return input_enabled ? (long long)(GetMouseWheelMove() * 64) : 0;
 }
-long long pl_ui_mouse_x(void) { return (long long)GetMousePosition().x; }
-long long pl_ui_mouse_y(void) { return (long long)GetMousePosition().y; }
 int pl_ui_hover(long long x, long long y, long long w, long long h) {
     Vector2 mouse = GetMousePosition();
     return input_enabled && (!clip_depth || CheckCollisionPointRec(mouse, clip_stack[clip_depth - 1]))
         && CheckCollisionPointRec(mouse, box(x, y, w, h));
+}
+int pl_ui_interactive(long long x, long long y, long long w, long long h) {
+    int over = pl_ui_hover(x, y, w, h);
+    if (over) requested_cursor = MOUSE_CURSOR_POINTING_HAND;
+    return over;
 }
 int pl_ui_released(void) { return input_enabled && IsMouseButtonReleased(MOUSE_BUTTON_LEFT); }
 void pl_ui_round(long long x, long long y, long long w, long long h, long long hex) {
     DrawRectangleRounded(box(x, y, w, h), 0.16f, 8, color(hex));
 }
 long long pl_ui_measure(const char *text, long long size) {
-    return (long long)MeasureTextEx(GuiGetFont(), text, (float)size, 0).x;
+    return (long long)pl_font_measure(text, (int)size);
 }
 void pl_ui_logo(long long x, long long y, long long size) {
     if (logo.id) DrawTexturePro(logo, (Rectangle){0, 0, 256, 256}, box(x, y, size, size), (Vector2){0,0}, 0, WHITE);
@@ -192,10 +192,7 @@ void pl_ui_rect(long long x, long long y, long long w, long long h, long long he
     DrawRectangleRec(box(x, y, w, h), color(hex));
 }
 void pl_ui_text(const char *text, long long x, long long y, long long size, long long hex) {
-    DrawTextEx(GuiGetFont(), text, (Vector2){(float)x, (float)y}, (float)size, 0, color(hex));
-}
-int pl_ui_button(const char *text, long long x, long long y, long long w, long long h) {
-    return GuiButton(box(x, y, w, h), text);
+    pl_font_draw(text, (float)x, (float)y, (int)size, color(hex));
 }
 int pl_ui_clicked(long long x, long long y, long long w, long long h) {
     Vector2 mouse = GetMousePosition();
@@ -208,6 +205,7 @@ void pl_ui_field(long long id, const char *text, long long x, long long y, long 
         GuiLabel(box(x, y, w, h), "Text exceeds prototype editor capacity");
         return;
     }
+    if (pl_ui_hover(x, y, w, h)) requested_cursor = MOUSE_CURSOR_IBEAM;
     memcpy(field_buffer, text, strlen(text) + 1);
     GuiTextBox(box(x, y, w, h), field_buffer, FIELD_BYTES, editing);
 }

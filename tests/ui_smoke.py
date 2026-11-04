@@ -6,7 +6,7 @@ import shlex
 import subprocess
 import tempfile
 import time
-from ui_driver import Driver, key, type_text
+from ui_driver import Driver, key, type_text, cursor_image
 
 ROOT = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="powerlaunch-ui-") as directory:
@@ -21,9 +21,25 @@ with tempfile.TemporaryDirectory(prefix="powerlaunch-ui-") as directory:
     library = Path(directory) / "library.json"
     try:
         driver = Driver()
+        def cursor_at(px, py):
+            driver.move(px, py)
+            time.sleep(0.12)
+            return cursor_image()
+
+        arrow = cursor_at(200, 80)
+        hand = cursor_at(90, 286)
+        assert hand != arrow, "Buttons should display a pointing cursor"
+        assert cursor_at(200, 80) == arrow, "Leaving a button should restore the arrow"
         driver.click(90, 286)  # Add game, separate editor.
+        ibeam = cursor_at(600, 142)
+        assert ibeam != arrow and ibeam != hand, "Editable fields should display an I-beam"
         driver.click(600, 142)
         type_text("Test game")
+        driver.click(90, 155)  # Invalid draft must survive a failed save from confirmation.
+        assert cursor_at(90, 286) == arrow, "Modal background buttons must not request a pointer"
+        driver.click(470, 467)  # Save fails because a target has not been chosen.
+        assert not library.exists(), "Invalid draft should not be committed"
+        driver.click(812, 467)  # Keep editing after failed save.
         driver.click(600, 220)
         type_text(str(fixture))
         driver.click(600, 536)
@@ -42,6 +58,7 @@ with tempfile.TemporaryDirectory(prefix="powerlaunch-ui-") as directory:
         assert saved["games"][0]["tags"] == ["Adventure", "CD-ROM"], saved
         assert saved["games"][0]["arguments"] == ["two words", ""], saved
         driver.click(280, 46)  # Back to the library.
+        assert cursor_at(300, 230) == hand, "Library cards should display a pointing cursor"
         driver.click(300, 120)
         driver.click(300, 209)  # Explicit Adventure tag option.
         driver.click(1160, 120)

@@ -12,7 +12,6 @@ extern "C" {
     fn pl_ui_wheel() -> Int;
     fn pl_ui_rect(x: Int, y: Int, w: Int, h: Int, hex: Int);
     fn pl_ui_text(text: CStr, x: Int, y: Int, size: Int, hex: Int);
-    fn pl_ui_button(text: CStr, x: Int, y: Int, w: Int, h: Int) -> Bool;
     fn pl_ui_clicked(x: Int, y: Int, w: Int, h: Int) -> Bool;
     fn pl_ui_field(id: Int, text: CStr, x: Int, y: Int, w: Int, h: Int, editing: Bool);
     fn pl_ui_value(id: Int) -> CStr;
@@ -24,10 +23,10 @@ extern "C" {
     fn pl_ui_round(x: Int, y: Int, w: Int, h: Int, hex: Int);
     fn pl_ui_measure(text: CStr, size: Int) -> Int;
     fn pl_ui_logo(x: Int, y: Int, size: Int);
-    fn pl_ui_mouse_x() -> Int;
-    fn pl_ui_mouse_y() -> Int;
     fn pl_ui_image_valid(path: CStr) -> Bool;
     fn pl_ui_enable(enabled: Bool);
+    fn pl_ui_interactive(x: Int, y: Int, w: Int, h: Int) -> Bool;
+    fn pl_ui_consume_activation();
 }
 
 pub let init (): Unit = unsafe { pl_ui_init() }
@@ -43,10 +42,8 @@ pub let down (code: Int): Bool = unsafe { pl_ui_down(code) }
 pub let wheel (): Int = unsafe { pl_ui_wheel() }
 pub let rect (x: Int) (y: Int) (w: Int) (h: Int) (color: Int): Unit =
     unsafe { pl_ui_rect(x, y, w, h, color) }
-pub let text (value: String) (x: Int) (y: Int) (size: Int) (color: Int): Unit =
+let draw_text (value: String) (x: Int) (y: Int) (size: Int) (color: Int): Unit =
     unsafe { pl_ui_text(value.as_cstr(), x, y, size, color) }
-pub let button (value: String) (x: Int) (y: Int) (w: Int) (h: Int): Bool =
-    unsafe { pl_ui_button(value.as_cstr(), x, y, w, h) }
 pub let clicked (x: Int) (y: Int) (w: Int) (h: Int): Bool =
     unsafe { pl_ui_clicked(x, y, w, h) }
 pub let field (id: Int) (value: String) (x: Int) (y: Int) (w: Int) (h: Int) (editing: Bool): String =
@@ -59,20 +56,12 @@ pub let unclip (): Unit = unsafe { pl_ui_unclip() }
 pub let cover (path: String) (x: Int) (y: Int) (w: Int) (h: Int): Bool =
     unsafe { pl_ui_cover(path.as_cstr(), x, y, w, h) }
 
-pub let canvas (): Int = 1514019
-pub let rail (): Int = 1843243
-pub let surface (): Int = 2370104
-pub let ink (): Int = 15593719
-pub let muted (): Int = 10858435
-pub let accent (): Int = 12167154
-pub let warning (): Int = 15179927
-
 pub let hover (x: Int) (y: Int) (w: Int) (h: Int): Bool = unsafe { pl_ui_hover(x, y, w, h) }
+pub let interactive (x: Int) (y: Int) (w: Int) (h: Int): Bool = unsafe { pl_ui_interactive(x, y, w, h) }
+pub let consume_activation (): Unit = unsafe { pl_ui_consume_activation() }
 pub let released (): Bool = unsafe { pl_ui_released() }
-pub let mouse_x (): Int = unsafe { pl_ui_mouse_x() }
-pub let mouse_y (): Int = unsafe { pl_ui_mouse_y() }
 pub let round_rect (x: Int) (y: Int) (w: Int) (h: Int) (color: Int): Unit = unsafe { pl_ui_round(x, y, w, h, color) }
-pub let measure (text: String) (size: Int): Int = unsafe { pl_ui_measure(text.as_cstr(), size) }
+let measure_size (text: String) (size: Int): Int = unsafe { pl_ui_measure(text.as_cstr(), size) }
 pub let logo (x: Int) (y: Int) (size: Int): Unit = unsafe { pl_ui_logo(x, y, size) }
 pub let image_valid (path: String): Bool = unsafe { pl_ui_image_valid(path.as_cstr()) }
 pub let enable (enabled: Bool): Unit = unsafe { pl_ui_enable(enabled) }
@@ -83,17 +72,17 @@ pub let outline (x: Int) (y: Int) (w: Int) (h: Int) (color: Int): Unit = {
 }
 
 // Button composition and interaction remain Plum, with C exposing primitives.
-pub let action (label: String) (x: Int) (y: Int) (w: Int) (h: Int) (kind: Int) (selected: Bool) (focused: Bool): Bool = {
-    let over = hover(x, y, w, h);
-    let primary = kind == 1;
+pub let action (label: String) (x: Int) (y: Int) (w: Int) (h: Int) (kind: ButtonStyle) (selected: Bool) (focused: Bool): Bool = {
+    let over = interactive(x, y, w, h);
+    let primary = kind == PrimaryButton;
     let background = if primary { if over { 13684479 } else { accent(()) } }
-        else if over || selected { 3422796 } else if kind == 3 { rail(()) }
-        else if kind == 2 { canvas(()) } else { surface(()) };
+        else if over || selected { 3422796 } else if kind == NavigationButton { rail(()) }
+        else if kind == QuietButton { canvas(()) } else { surface(()) };
     round_rect(x, y, w, h, background);
-    if kind == 3 && selected { rect(x, y + 10, 3, h - 20, accent(())) };
+    if kind == NavigationButton && selected { rect(x, y + 10, 3, h - 20, accent(())) };
     if focused { outline(x - 3, y - 3, w + 6, h + 6, accent(())) };
-    let tx = if kind == 3 { x + 14 } else { x + (w - measure(label, 17)) / 2 };
-    text(label, tx, y + (h - 20) / 2, 17, if primary { canvas(()) } else if kind == 4 { warning(()) } else { ink(()) });
+    let tx = if kind == NavigationButton { x + 14 } else { x + (w - measure_size(label, font_size(BodyText))) / 2 };
+    text(label, tx, y + (h - 20) / 2, BodyText, if primary { canvas(()) } else if kind == DangerButton { warning(()) } else { ink(()) });
     (over && released(())) || (focused && (key(257) || key(32)))
 }
 
@@ -101,13 +90,18 @@ let wrap_words (words: Array[String]) (index: Int) (line: String) (width: Int) (
     if index >= words.len() { out.push(line) }
     else {
         let next = if line == "" { words[index] } else { line.concat(" ").concat(words[index]) };
-        if line != "" && measure(next, size) > width { wrap_words(words, index + 1, words[index], width, size, out.push(line)) }
+        if line != "" && measure_size(next, size) > width { wrap_words(words, index + 1, words[index], width, size, out.push(line)) }
         else { wrap_words(words, index + 1, next, width, size, out) }
     }
 
-pub let paragraph (value: String) (x: Int) (y: Int) (width: Int) (size: Int) (color: Int): Int = {
+pub let paragraph (value: String) (x: Int) (y: Int) (width: Int) (style: TextStyle) (color: Int): Int = {
+    let size = font_size(style);
     let lines: Array[String] = [];
     for line in value.split("\n") { lines = Array.concat(lines, wrap_words(line.split(" "), 0, "", width, size, [])); };
-    for i in 0..lines.len() { text(lines[i], x, y + i * (size + 9), size, color); };
+    for i in 0..lines.len() { draw_text(lines[i], x, y + i * (size + 9), size, color); };
     lines.len() * (size + 9)
 }
+
+// Drawing and wrapping resolve the same role through one font policy.
+pub let text (value: String) (x: Int) (y: Int) (style: TextStyle) (color: Int): Unit =
+    draw_text(value, x, y, font_size(style), color)

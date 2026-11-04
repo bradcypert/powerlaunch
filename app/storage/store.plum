@@ -1,0 +1,98 @@
+use library;
+use platform;
+use Os;
+
+pub struct Store { pub root: String, pub writable: Bool }
+pub struct Opened { pub store: Store, pub lib: library.Library, pub error: String }
+pub struct Saved { pub lib: library.Library, pub game: library.Game }
+
+pub let open (root: String): Opened = {
+    let prepared = Result.and_then(platform.ensure_dir(root), |ignored| platform.ensure_dir(root.concat("/artwork")));
+    let loaded = Result.and_then(prepared, |ignored| library.load(root.concat("/library.json")));
+    Opened { store: Store { root: root, writable: loaded.is_ok() },
+        lib: loaded.unwrap_or(library.empty(())),
+        error: match loaded { Ok(_) => "", Err(e) => "Library could not be opened. Saving is disabled: ".concat(e) } }
+}
+
+let write (store: Store) (lib: library.Library): Result[Unit, String] =
+    if !store.writable { Err("Library recovery is required before changes can be saved.") }
+    else { Result.map_err(library.save(store.root.concat("/library.json"), lib), |e| "Could not save: ".concat(e)) }
+
+// Metadata replacement is the commit point. Never return the new library until
+// it succeeds; on failure remove only the artwork created by this operation.
+// Existing/shared covers are deliberately retained until reference tracking exists.
+pub let save_game (store: Store) (lib: library.Library) (draft: library.Game) (artwork: String): Result[Saved, String] =
+    if !store.writable { Err("Library recovery is required before changes can be saved.") }
+    else { Result.and_then(library.upsert(lib, draft), |updated| {
+        let game = if draft.id == "" { updated.games[updated.games.len() - 1] }
+            else { Array.find(updated.games, |g| g.id == draft.id).unwrap_or(draft) };
+        let imported = if artwork == "" { Ok("") }
+            else { Result.map_err(platform.import_artwork(store.root, artwork), |e| "Could not copy cover: ".concat(e)) };
+        Result.and_then(imported, |name| {
+            let covered = if name == "" { game } else { library.Game { cover: name, ..game } };
+            let committed = Result.and_then(library.upsert(updated, covered), |with_artwork|
+                Result.map(write(store, with_artwork), |ignored| Saved { lib: with_artwork, game: covered }));
+            match committed {
+                Ok(saved) => Ok(saved),
+                Err(e) => {
+                    if name == "" { Err(e) }
+                    else { match Os.remove_file(store.root.concat("/artwork/").concat(name)) {
+                        Ok(_) => Err(e),
+                        Err(cleanup) => Err(e.concat(" Cover rollback also failed: ").concat(cleanup)),
+                    } }
+                },
+            }
+        })
+    }) }
+
+pub let cover_path (store: Store) (name: String): String =
+    if name == "" { "" } else { store.root.concat("/artwork/").concat(name) }
+
+pub let remove_game (store: Store) (lib: library.Library) (id: String): Result[library.Library, String] = {
+    let updated = library.remove(lib, id);
+    Result.map(write(store, updated), |ignored| updated)
+}
+
+pub let test_commit_failure_rolls_back_only_new_artwork (): Unit = {
+    let root = Os.temp_dir(()).unwrap_or("");
+    assert(root != "");
+    let opened = open(root);
+    let old_cover = root.concat("/artwork/existing.png");
+    let source = root.concat("/source.png");
+    assert(Os.write_file(old_cover, "keep").is_ok());
+    assert(Os.write_file(source, "new cover").is_ok());
+    // A directory at the metadata path forces atomic replacement to fail.
+    assert(Os.make_dir(root.concat("/library.json")).is_ok());
+    let game = library.Game { title: "Game", target: "/game", ..library.draft(()) };
+    assert(save_game(opened.store, opened.lib, game, source).is_err());
+    assert_eq(Os.list_dir(root.concat("/artwork")).unwrap_or([]), ["existing.png"]);
+    assert_eq(Os.read_file(old_cover), Ok("keep"));
+    assert(Os.remove_tree(root).is_ok())
+}
+
+pub let test_recovery_store_rejects_mutation_and_success_reloads_artwork (): Unit = {
+    let root = Os.temp_dir(()).unwrap_or("");
+    assert(root != "");
+    let opened = open(root);
+    let game = library.Game { title: "Game", target: "/game", ..library.draft(()) };
+    assert(Os.write_file(root.concat("/library.json"), "broken").is_ok());
+    let recovery = open(root);
+    assert(!recovery.store.writable);
+    assert(save_game(recovery.store, recovery.lib, game, "").is_err());
+    assert(remove_game(recovery.store, recovery.lib, "game-1").is_err());
+    assert_eq(Os.read_file(root.concat("/library.json")), Ok("broken"));
+    assert(Os.remove_file(root.concat("/library.json")).is_ok());
+    let source = root.concat("/source.png");
+    assert(Os.write_file(source, "cover fixture").is_ok());
+    match save_game(opened.store, opened.lib, game, source) {
+        Err(e) => { println(e); assert(false) },
+        Ok(saved) => {
+            assert(Os.remove_file(source).is_ok());
+            assert_eq(open(root).lib, saved.lib);
+            assert_eq(Os.read_file(root.concat("/artwork/").concat(saved.game.cover)), Ok("cover fixture"));
+            assert(remove_game(opened.store, saved.lib, saved.game.id).is_ok());
+            assert_eq(open(root).lib.games.len(), 0)
+        },
+    };
+    assert(Os.remove_tree(root).is_ok())
+}
