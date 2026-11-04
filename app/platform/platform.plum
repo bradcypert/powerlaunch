@@ -1,0 +1,118 @@
+use Os;
+
+extern "C" {
+    fn pl_process_new(program: CStr) -> Int;
+    fn pl_process_arg(handle: Int, argument: CStr) -> CStr;
+    fn pl_process_free(handle: Int);
+    fn pl_process_start(handle: Int, directory: CStr) -> CStr;
+    fn pl_pick_file(kind: Int) -> CStr;
+    fn pl_unique_token() -> CStr;
+}
+
+pub let parent (path: String): String = {
+    let parts = path.replace("\\", "/").split("/");
+    let dir = Array.join(Array.slice(parts, 0, parts.len() - 1), "/");
+    if dir == "" && path.starts_with("/") { "/" } else { dir }
+}
+
+pub let basename (path: String): String =
+    Array.last(path.replace("\\", "/").split("/")).unwrap_or("")
+
+pub let suggested_title (path: String): String = {
+    let name = basename(path);
+    let parts = name.split(".");
+    if parts.len() > 1 { Array.join(Array.slice(parts, 0, parts.len() - 1), ".") }
+    else { name }
+}
+
+pub let ensure_dir (path: String): Result[Unit, String] = match Os.exists(path) {
+    Err(e) => Err(e),
+    Ok(true) => match Os.stat(path) {
+        Ok(info) => if info.is_directory { Ok(()) } else { Err("Expected a directory: ".concat(path)) },
+        Err(e) => Err(e),
+    },
+    Ok(false) => {
+        let above = parent(path);
+        if above == "" || above == path { Os.make_dir(path) }
+        else { Result.and_then(ensure_dir(above), |ignored| Os.make_dir(path)) }
+    },
+}
+
+pub let data_root (): Result[String, String] = {
+    let override = Os.env_var("POWERLAUNCH_DATA_DIR").unwrap_or("");
+    if override != "" { Ok(override) }
+    else if Os.platform(()) == "windows" {
+        Option.ok_or(Option.map(Os.env_var("LOCALAPPDATA"), |base| base.concat("/Powerlaunch")),
+            "LOCALAPPDATA is unavailable. Set POWERLAUNCH_DATA_DIR to choose library storage.")
+    } else {
+        match Os.home_dir(()) {
+            None => Err("Home directory unavailable. Set POWERLAUNCH_DATA_DIR to choose library storage."),
+            Some(home) => if Os.platform(()) == "macos" {
+                Ok(home.concat("/Library/Application Support/Powerlaunch"))
+            } else {
+                let base = Os.env_var("XDG_DATA_HOME").unwrap_or(home.concat("/.local/share"));
+                Ok(base.concat("/powerlaunch"))
+            },
+        }
+    }
+}
+
+pub let pick_file (artwork: Bool): String = unsafe {
+    pl_pick_file(if artwork { 1 } else { 0 }).as_string()
+}
+
+pub let import_artwork (root: String) (source: String): Result[String, String] = {
+    let extension = Array.last(source.split(".")).unwrap_or("").to_lower();
+    if !Array.contains(["png", "jpg", "jpeg", "bmp", "gif", "tga"], extension) {
+        Err("Choose a PNG, JPEG, BMP, GIF, or TGA cover image.")
+    } else {
+        let token = unsafe { pl_unique_token().as_string() };
+        let name = token.concat(".").concat(extension);
+        Result.and_then(Os.read_bytes(source), |bytes|
+            Result.map(Os.write_bytes(root.concat("/artwork/").concat(name), bytes), |ignored| name))
+    }
+}
+
+let append_args (handle: Int) (args: Array[String]) (index: Int): Result[Unit, String] =
+    if index >= args.len() { Ok(()) }
+    else {
+        let error = unsafe { pl_process_arg(handle, args[index].as_cstr()).as_string() };
+        if error == "" { append_args(handle, args, index + 1) } else { Err(error) }
+    }
+
+pub let launch (target: String) (args: Array[String]) (directory: String): Result[Unit, String] = {
+    let handle = unsafe { pl_process_new(target.as_cstr()) };
+    if handle == 0 { Err("Could not prepare the game process.") }
+    else { match append_args(handle, args, 0) {
+        Err(e) => { unsafe { pl_process_free(handle) }; Err(e) },
+        Ok(_) => {
+            let error = unsafe { pl_process_start(handle, directory.as_cstr()).as_string() };
+            if error == "" { Ok(()) } else { Err(error) }
+        },
+    } }
+}
+
+pub let test_path_helpers (): Unit = {
+    assert_eq(parent("C:\\Old Games\\Café\\game.exe"), "C:/Old Games/Café");
+    assert_eq(parent("/game"), "/");
+    assert_eq(suggested_title("C:\\Games\\Test.Game.exe"), "Test.Game")
+}
+
+pub let test_artwork_is_an_independent_managed_copy (): Unit = {
+    match Os.temp_dir(()) {
+        Err(e) => { println(e); assert(false) },
+        Ok(dir) => {
+            assert(Result.is_ok(ensure_dir(dir.concat("/artwork"))));
+            let source = dir.concat("/source.png");
+            assert(Result.is_ok(Os.write_file(source, "binary-copy fixture")));
+            match import_artwork(dir, source) {
+                Err(e) => { println(e); assert(false) },
+                Ok(name) => {
+                    assert(Result.is_ok(Os.remove_file(source)));
+                    assert_eq(Os.read_file(dir.concat("/artwork/").concat(name)), Ok("binary-copy fixture"))
+                },
+            };
+            assert(Result.is_ok(Os.remove_tree(dir)))
+        },
+    }
+}

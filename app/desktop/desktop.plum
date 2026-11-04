@@ -1,0 +1,50 @@
+extern "C" {
+    fn pl_ui_init();
+    fn pl_ui_done() -> Bool;
+    fn pl_ui_begin();
+    fn pl_ui_end();
+    fn pl_ui_close();
+    fn pl_ui_width() -> Int;
+    fn pl_ui_height() -> Int;
+    fn pl_ui_key(key: Int) -> Bool;
+    fn pl_ui_down(key: Int) -> Bool;
+    fn pl_ui_wheel() -> Int;
+    fn pl_ui_rect(x: Int, y: Int, w: Int, h: Int, hex: Int);
+    fn pl_ui_text(text: CStr, x: Int, y: Int, size: Int, hex: Int);
+    fn pl_ui_button(text: CStr, x: Int, y: Int, w: Int, h: Int) -> Bool;
+    fn pl_ui_clicked(x: Int, y: Int, w: Int, h: Int) -> Bool;
+    fn pl_ui_field(id: Int, text: CStr, x: Int, y: Int, w: Int, h: Int, editing: Bool);
+    fn pl_ui_value(id: Int) -> CStr;
+    fn pl_ui_clip(x: Int, y: Int, w: Int, h: Int);
+    fn pl_ui_unclip();
+    fn pl_ui_cover(path: CStr, x: Int, y: Int, w: Int, h: Int);
+}
+
+pub let init (): Unit = unsafe { pl_ui_init() }
+pub let done (): Bool = unsafe { pl_ui_done() }
+pub let begin (): Unit = unsafe { pl_ui_begin() }
+pub let end (): Unit = unsafe { pl_ui_end() }
+pub let close (): Unit = unsafe { pl_ui_close() }
+pub let width (): Int = unsafe { pl_ui_width() }
+pub let height (): Int = unsafe { pl_ui_height() }
+pub let key (code: Int): Bool = unsafe { pl_ui_key(code) }
+pub let down (code: Int): Bool = unsafe { pl_ui_down(code) }
+pub let wheel (): Int = unsafe { pl_ui_wheel() }
+pub let rect (x: Int) (y: Int) (w: Int) (h: Int) (color: Int): Unit =
+    unsafe { pl_ui_rect(x, y, w, h, color) }
+pub let text (value: String) (x: Int) (y: Int) (size: Int) (color: Int): Unit =
+    unsafe { pl_ui_text(value.as_cstr(), x, y, size, color) }
+pub let button (value: String) (x: Int) (y: Int) (w: Int) (h: Int): Bool =
+    unsafe { pl_ui_button(value.as_cstr(), x, y, w, h) }
+pub let clicked (x: Int) (y: Int) (w: Int) (h: Int): Bool =
+    unsafe { pl_ui_clicked(x, y, w, h) }
+pub let field (id: Int) (value: String) (x: Int) (y: Int) (w: Int) (h: Int) (editing: Bool): String =
+    if value.len() >= 16384 { value }
+    else { unsafe {
+        pl_ui_field(id, value.as_cstr(), x, y, w, h, editing);
+        pl_ui_value(id).as_string()
+    } }
+pub let clip (x: Int) (y: Int) (w: Int) (h: Int): Unit = unsafe { pl_ui_clip(x, y, w, h) }
+pub let unclip (): Unit = unsafe { pl_ui_unclip() }
+pub let cover (path: String) (x: Int) (y: Int) (w: Int) (h: Int): Unit =
+    unsafe { pl_ui_cover(path.as_cstr(), x, y, w, h) }

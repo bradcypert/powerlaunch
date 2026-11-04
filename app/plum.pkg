@@ -1,0 +1,7 @@
+Package {
+    name: "powerlaunch",
+    version: "0.1.0",
+    native_deps: [],
+    link: ["raylib"],
+    link_windows: ["comdlg32", "ole32", "shell32", "uuid", "gdi32", "winmm", "opengl32"],
+}

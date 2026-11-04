@@ -1,0 +1,22 @@
+[tools]
+"github:bradcypert/plum" = "0.0.41"
+
+[env]
+PLUM_CACHE = "{{ config_root }}/.cache/plum"
+
+[tasks.build]
+description = "Build the Plum desktop prototype"
+run = "python3 scripts/build.py"
+
+[tasks.dev]
+description = "Build and open Powerlaunch"
+depends = ["build"]
+run = "python3 scripts/run.py"
+
+[tasks.test]
+description = "Run Plum domain/persistence and native process integration tests"
+run = "python3 scripts/test.py"
+
+[tasks.check]
+description = "Type-check the Plum application"
+run = "mise exec -- plum check app"

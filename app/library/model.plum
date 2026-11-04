@@ -1,0 +1,216 @@
+use Json;
+use Os;
+
+pub struct Game {
+    pub id: String,
+    pub title: String,
+    pub target: String,
+    pub arguments: Array[String],
+    pub working_directory: String,
+    pub cover: String,
+    pub description: String,
+    pub release_year: String,
+    pub developer: String,
+    pub tags: Array[String],
+    pub favorite: Bool,
+}
+
+pub struct Library {
+    pub games: Array[Game],
+    pub next_id: Int,
+}
+
+pub let empty (): Library = Library { games: [], next_id: 1 }
+
+pub let draft (): Game = Game {
+    id: "", title: "", target: "", arguments: [], working_directory: "",
+    cover: "", description: "", release_year: "", developer: "", tags: [],
+    favorite: false,
+}
+
+let absolute_path (path: String): Bool = {
+    let normalized = path.replace("\\", "/");
+    normalized.starts_with("/") ||
+        (normalized.char_len() >= 3 && String.slice(normalized, 1, 3) == ":/")
+}
+
+pub let validate (game: Game): Result[Game, String] =
+    if game.title.trim() == "" { Err("Enter a game title.") }
+    else if game.target.trim() == "" { Err("Choose a game executable or shortcut.") }
+    else if game.target.contains("\u{0000}") { Err("The target contains a NUL character.") }
+    else if !absolute_path(game.target) { Err("Choose an absolute path to the game executable or shortcut.") }
+    else if game.working_directory.contains("\u{0000}") { Err("The working directory contains a NUL character.") }
+    else if game.working_directory != "" && !absolute_path(game.working_directory) {
+        Err("Use an absolute working directory, or leave it blank.")
+    }
+    else if Array.any(game.arguments, |a| a.contains("\u{0000}")) {
+        Err("Arguments cannot contain NUL characters.")
+    }
+    else { Ok(Game { title: game.title.trim(), ..game }) }
+
+pub let upsert (lib: Library) (game: Game): Result[Library, String] = {
+    match validate(game) { Err(e) => Err(e), Ok(valid) => {
+    if valid.id == "" {
+        let added = Game { id: "game-".concat(lib.next_id.to_string()), ..valid };
+        Ok(Library { games: lib.games.push(added), next_id: lib.next_id + 1 })
+    } else {
+        match Array.find_index(lib.games, |g| g.id == valid.id) {
+            None => Err("This library entry no longer exists. Reopen it before saving."),
+            Some(i) => Ok(Library { games: lib.games.set(i, valid), ..lib }),
+        }
+    }
+} }
+}
+
+pub let remove (lib: Library) (id: String): Library =
+    Library { games: Array.filter(lib.games, |g| g.id != id), ..lib }
+
+pub let search (lib: Library) (query: String) (favorites: Bool): Array[Game] = {
+    let q = query.trim().to_lower();
+    Array.sort_by(Array.filter(lib.games, |g|
+        (!favorites || g.favorite) && (q == "" || g.title.to_lower().contains(q)
+            || Array.any(g.tags, |tag| tag.to_lower().contains(q)))),
+        |a, b| a.title.to_lower() <= b.title.to_lower())
+}
+
+let string_values (values: Array[String]): JsonValue =
+    JsonArray(Array.map(values, |s| JsonString(s)))
+
+let game_value (g: Game): JsonValue = JsonObject([
+    JsonEntry { key: "id", value: JsonString(g.id) },
+    JsonEntry { key: "title", value: JsonString(g.title) },
+    JsonEntry { key: "target", value: JsonString(g.target) },
+    JsonEntry { key: "arguments", value: string_values(g.arguments) },
+    JsonEntry { key: "working_directory", value: JsonString(g.working_directory) },
+    JsonEntry { key: "cover", value: JsonString(g.cover) },
+    JsonEntry { key: "description", value: JsonString(g.description) },
+    JsonEntry { key: "release_year", value: JsonString(g.release_year) },
+    JsonEntry { key: "developer", value: JsonString(g.developer) },
+    JsonEntry { key: "tags", value: string_values(g.tags) },
+    JsonEntry { key: "favorite", value: JsonBool(g.favorite) },
+])
+
+pub let encode (lib: Library): Result[String, String] = json_stringify(JsonObject([
+    JsonEntry { key: "schema_version", value: JsonNumber(1.0) },
+    JsonEntry { key: "next_id", value: JsonString(lib.next_id.to_string()) },
+    JsonEntry { key: "games", value: JsonArray(Array.map(lib.games, game_value)) },
+]))
+
+let text_field (name: String): Json.Decoder[String] = Json.field(name, Json.string(()))
+
+let game_decoder (): Json.Decoder[Game] = {
+    let base = Json.map6(text_field("id"), text_field("title"), text_field("target"),
+        Json.field("arguments", Json.list(Json.string(()))),
+        text_field("working_directory"), text_field("cover"),
+        |id, title, target, arguments, cwd, cover|
+            Game { id: id, title: title, target: target,
+                arguments: arguments, working_directory: cwd, cover: cover, ..draft(()) });
+    Json.and_then(base, |g|
+        Json.map5(text_field("description"), text_field("release_year"), text_field("developer"),
+            Json.field("tags", Json.list(Json.string(()))), Json.field("favorite", Json.bool(())),
+            |description, year, developer, tags, favorite|
+                Game { description: description, release_year: year,
+                    developer: developer, tags: tags, favorite: favorite, ..g }))
+}
+
+let library_decoder (): Json.Decoder[Library] =
+    Json.and_then(Json.field("schema_version", Json.int(())), |version|
+        if version != 1 { Json.fail("Unsupported library schema version; your file has not been changed") }
+        else { Json.map2(text_field("next_id"), Json.field("games", Json.list(game_decoder(()))),
+            |next, games| Library {
+                next_id: match next.parse_int() { Ok(n) => n, Err(_) => 0 }, games: games }) })
+
+let valid_cover (path: String): Bool = path == "" ||
+    (!path.contains("/") && !path.contains("\\") && !path.contains(":")
+        && !path.contains("\u{0000}") && path != "." && path != "..")
+
+let valid_game_id (id: String) (next_id: Int): Bool =
+    if !id.starts_with("game-") { false }
+    else { match String.slice(id, 5, id.char_len()).parse_int() {
+        Ok(n) => n > 0 && n < next_id && id == "game-".concat(n.to_string()),
+        Err(e) => false,
+    } }
+
+let unique_ids (games: Array[Game]): Bool = {
+    let seen: Set[String] = Set.new(());
+    for game in games { seen = Set.insert(seen, game.id); };
+    Set.len(seen) == games.len()
+}
+
+pub let decode (text: String): Result[Library, String] = {
+    match Json.decode_string(library_decoder(()), text) { Err(e) => Err(e), Ok(lib) => {
+    if lib.next_id < 1 || lib.next_id > 1000000000 { Err("Invalid next game ID; library has not been changed.") }
+    else if Array.any(lib.games, |g| !valid_game_id(g.id, lib.next_id) || !valid_cover(g.cover)
+        || Result.is_err(validate(g))) {
+        Err("Invalid game record; library has not been changed.")
+    } else if !unique_ids(lib.games) {
+        Err("Duplicate game IDs; library has not been changed.")
+    } else { Ok(lib) }
+} }
+}
+
+pub let load (path: String): Result[Library, String] =
+    match Os.exists(path) {
+        Err(e) => Err(e),
+        Ok(false) => Ok(empty(())),
+        Ok(true) => Result.and_then(Os.read_file(path), decode),
+    }
+
+pub let save (path: String) (lib: Library): Result[Unit, String] =
+    Result.and_then(encode(lib), |text| Os.write_file(path, text))
+
+let must[T] (result: Result[T, String]) (fallback: T): T = match result {
+    Ok(value) => value,
+    Err(e) => { println(e); assert(false); fallback },
+}
+
+let must_lib (r: Result[Library, String]): Library = must(r, empty(()))
+let must_text (r: Result[String, String]): String = must(r, "")
+let must_unit (r: Result[Unit, String]): Unit = must(r, ())
+
+pub let test_metadata_and_arguments_roundtrip (): Unit = {
+    let g = Game { title: "Café: test", target: "C:\\Old Games\\game.exe",
+        arguments: ["", "two words", "literal;$(text)", "quote\""],
+        working_directory: "C:\\Old Games", description: "First line\nSecond line",
+        tags: ["CD-ROM", "Adventure"], favorite: true, ..draft(()) };
+    let lib = must_lib(upsert(empty(()), g));
+    assert_eq(must_lib(decode(must_text(encode(lib)))), lib)
+}
+
+pub let test_reject_unknown_schema_and_corrupt_records (): Unit = {
+    assert(Result.is_err(decode("{\"schema_version\":2}")));
+    assert(Result.is_err(decode("not json")));
+    assert(Result.is_err(upsert(empty(()), draft(()))))
+}
+
+pub let test_search_and_removal_preserve_id_sequence (): Unit = {
+    let first = must_lib(upsert(empty(()), Game { title: "Zork", target: "/games/zork", favorite: true, ..draft(()) }));
+    let second = must_lib(upsert(first, Game { title: "Another game", target: "/games/another", ..draft(()) }));
+    assert_eq(search(second, "ZORK", false).len(), 1);
+    assert_eq(search(second, "", true).len(), 1);
+    assert_eq(remove(second, "game-1").next_id, 3)
+}
+
+pub let test_atomic_persistence_and_failed_save (): Unit = {
+    let dir = must_text(Os.temp_dir(()));
+    let path = dir.concat("/library.json");
+    let lib = must_lib(upsert(empty(()), Game { title: "Saved game", target: "/game", ..draft(()) }));
+    must_unit(save(path, lib));
+    assert_eq(must_lib(load(path)), lib);
+    assert(Result.is_err(save(dir.concat("/missing/library.json"), empty(()))));
+    assert_eq(must_lib(load(path)), lib);
+    must_unit(Os.write_file(path, "{broken"));
+    assert(Result.is_err(load(path)));
+    assert_eq(must_text(Os.read_file(path)), "{broken");
+    must_unit(Os.remove_tree(dir))
+}
+
+pub let test_reject_duplicate_ids_and_unsafe_paths (): Unit = {
+    let game = Game { title: "Test", target: "/game", id: "game-1", ..draft(()) };
+    assert(Result.is_err(decode(must_text(encode(Library { games: [game, game], next_id: 2 })))));
+    assert(Result.is_err(decode(must_text(encode(Library { games: [game], next_id: 1 })))));
+    let escaping = Game { cover: "../outside.png", ..game };
+    assert(Result.is_err(decode(must_text(encode(Library { games: [escaping], next_id: 2 })))));
+    assert(Result.is_err(validate(Game { target: "relative/game", ..game })));
+    assert(Result.is_err(validate(Game { arguments: ["bad\u{0000}argument"], ..game })))
+}

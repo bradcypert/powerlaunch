@@ -1,0 +1,265 @@
+use library;
+use platform;
+use desktop as ui;
+use Os;
+
+struct State {
+    lib: library.Library,
+    draft: library.Game,
+    original: library.Game,
+    root: String,
+    query: String,
+    favorites: Bool,
+    focus: Int,
+    scroll: Int,
+    artwork_source: String,
+    arguments_text: String,
+    tags_text: String,
+    status: String,
+    blocked: Bool,
+    removing: Bool,
+}
+
+let args_text (args: Array[String]): String =
+    json_stringify(JsonArray(Array.map(args, |a| JsonString(a)))).unwrap_or("[]")
+
+let dirty (s: State): Bool = s.draft != s.original || s.artwork_source != ""
+    || s.arguments_text != args_text(s.original.arguments)
+    || s.tags_text != Array.join(s.original.tags, ", ")
+
+let message (s: State) (text: String): State = State { status: text, ..s }
+
+let open_game (s: State) (game: library.Game): State =
+    if dirty(s) { message(s, "Save or discard your changes before opening another game.") }
+    else { State { draft: game, original: game, artwork_source: "", focus: -1,
+        status: "", removing: false, arguments_text: args_text(game.arguments),
+        tags_text: Array.join(game.tags, ", "), ..s } }
+
+let select_target (s: State): State = {
+    let path = platform.pick_file(false);
+    if path == "" { s } else {
+        let shortcut = path.to_lower().ends_with(".lnk");
+        let title = if s.draft.title == "" { platform.suggested_title(path) } else { s.draft.title };
+        let cwd = if shortcut { "" } else { platform.parent(path) };
+        State { draft: library.Game { title: title, target: path, working_directory: cwd, ..s.draft },
+            status: "", ..s }
+    }
+}
+
+let save_library (s: State) (updated: library.Library) (game: library.Game): State =
+    match library.save(s.root.concat("/library.json"), updated) {
+        Err(e) => message(s, "Could not save: ".concat(e)),
+        Ok(ignored) => State { lib: updated, draft: game, original: game,
+            artwork_source: "", status: "Changes saved.", removing: false,
+            arguments_text: args_text(game.arguments), tags_text: Array.join(game.tags, ", "), ..s },
+    }
+
+let save_game (s: State): State =
+    if s.blocked { message(s, "Library recovery is required before changes can be saved.") }
+    else { match library.upsert(s.lib, s.draft) {
+        Err(e) => message(s, e),
+        Ok(updated) => {
+            let game = if s.draft.id == "" { updated.games[updated.games.len() - 1] }
+                else { Array.find(updated.games, |g| g.id == s.draft.id).unwrap_or(s.draft) };
+            if s.artwork_source == "" { save_library(s, updated, game) }
+            else { match platform.import_artwork(s.root, s.artwork_source) {
+                Err(e) => message(s, "Could not copy cover: ".concat(e)),
+                Ok(name) => {
+                    let covered = library.Game { cover: name, ..game };
+                    match library.upsert(updated, covered) {
+                        Err(e) => message(s, e),
+                        Ok(with_artwork) => {
+                            let result = save_library(s, with_artwork, covered);
+                            if result.artwork_source != "" {
+                                let cleanup = Os.remove_file(s.root.concat("/artwork/").concat(name));
+                                result
+                            } else { result }
+                        },
+                    }
+                },
+            } }
+        },
+    } }
+
+let play (s: State): State =
+    match library.validate(s.draft) {
+        Err(e) => message(s, e),
+        Ok(game) => match platform.launch(game.target, game.arguments, game.working_directory) {
+            Ok(ignored) => message(s, "Started ".concat(game.title).concat(".")),
+            Err(e) => message(s, "Could not launch: ".concat(e)),
+        },
+    }
+
+let remove_game (s: State): State =
+    if s.blocked { s }
+    else { match library.save(s.root.concat("/library.json"), library.remove(s.lib, s.draft.id)) {
+        Err(e) => message(s, "Could not remove entry: ".concat(e)),
+        Ok(ignored) => State { lib: library.remove(s.lib, s.draft.id),
+            draft: library.draft(()), original: library.draft(()), removing: false,
+            artwork_source: "", arguments_text: "[]", tags_text: "", status: "Removed from library. Game files were kept.", ..s },
+    } }
+
+let draw_navigation (s: State): State = {
+    ui.rect(0, 0, 168, ui.height(()), 2106930);
+    ui.text("Powerlaunch", 20, 28, 22, 15659252);
+    ui.text("Your games, together.", 20, 62, 13, 11187654);
+    let add = ui.button("Add game", 18, 112, 132, 42);
+    let all = ui.button(if !s.favorites { "[ All games ]" } else { "All games" }, 18, 188, 132, 38);
+    let favorites = ui.button(if s.favorites { "[ Favorites ]" } else { "Favorites" }, 18, 236, 132, 38);
+    ui.text(s.lib.games.len().to_string().concat(" games"), 22, ui.height(()) - 84, 16, 11187654);
+    ui.text("Local library", 22, ui.height(()) - 55, 14, 11187654);
+    if add { open_game(s, library.draft(())) }
+    else if all { State { favorites: false, scroll: 0, ..s } }
+    else if favorites { State { favorites: true, scroll: 0, ..s } }
+    else { s }
+}
+
+let draw_card (s: State) (game: library.Game) (x: Int) (y: Int) (w: Int): State = {
+    let selected = game.id == s.draft.id;
+    ui.rect(x - 3, y - 3, w + 6, 257, if selected { 8494027 } else { 2304566 });
+    ui.rect(x, y, w, 208, 2897736);
+    ui.clip(x + 10, y + 12, w - 20, 174);
+    ui.text(game.title, x + 12, y + 136, 20, 15659252);
+    ui.unclip(());
+    if game.cover != "" { ui.cover(s.root.concat("/artwork/").concat(game.cover), x, y, w, 208) };
+    ui.rect(x, y + 208, w, 43, 2304566);
+    ui.clip(x + 8, y + 215, w - 16, 32);
+    ui.text(if game.favorite { "* ".concat(game.title) } else { game.title }, x + 8, y + 219, 16, 15659252);
+    ui.unclip(());
+    if ui.clicked(x, y, w, 251) { open_game(s, game) } else { s }
+}
+
+let draw_grid (s: State): State = {
+    let right = ui.width(()) - 400;
+    let width = right - 204;
+    ui.text(if s.favorites { "Favorites" } else { "Your library" }, 196, 28, 28, 15659252);
+    ui.text("Installed here. Ready when you are.", 196, 66, 15, 11187654);
+    ui.text("Search title or tag", 196, 84, 12, 11187654);
+    let query = ui.field(0, s.query, 196, 104, width, 38, s.focus == 0);
+    let focus = if ui.clicked(196, 104, width, 38) { 0 } else { s.focus };
+    let games = library.search(s.lib, query, s.favorites);
+    let columns = Int.max(1, width / 170);
+    let card_width = (width - (columns - 1) * 18) / columns;
+    let rows = (games.len() + columns - 1) / columns;
+    let max_scroll = Int.max(0, rows * 283 - (ui.height(()) - 226));
+    let scroll = if query != s.query { 0 } else { Int.max(0, Int.min(max_scroll, s.scroll - ui.wheel(()))) };
+    let next = State { query: query, focus: focus, scroll: scroll, ..s };
+    ui.clip(190, 168, width + 12, ui.height(()) - 238);
+    let acc = next;
+    if games.len() == 0 {
+        ui.text(if s.lib.games.len() == 0 { "Make room for your favorites." } else { "No matching games." },
+            206, 224, 23, 15659252);
+        ui.text(if s.lib.games.len() == 0 { "Choose Add game to begin your library." } else { "Try another title or tag." },
+            206, 264, 16, 11187654)
+    };
+    for i in 0..games.len() {
+        let y = 174 + (i / columns) * 283 - scroll;
+        if y > -90 && y < ui.height(()) - 70 {
+            acc = draw_card(acc, games[i], 196 + (i % columns) * (card_width + 18), y, card_width);
+        }
+    };
+    ui.unclip(());
+    acc
+}
+
+struct Field { value: String, focus: Int }
+
+let editor_field (id: Int) (label: String) (value: String) (x: Int) (y: Int) (w: Int) (focus: Int): Field = {
+    ui.text(label, x, y, 14, 11187654);
+    let next = ui.field(id, value, x, y + 22, w, 34, focus == id);
+    Field { value: next, focus: if ui.clicked(x, y + 22, w, 34) { id } else { focus } }
+}
+
+let draw_editor (s: State): State = {
+    let x = ui.width(()) - 378;
+    let w = 350;
+    ui.rect(x - 18, 0, 396, ui.height(()), 2304566);
+    ui.text(if s.draft.id == "" { "Add a game" } else { "Game details" }, x, 28, 24, 15659252);
+    let title = editor_field(1, "Title", s.draft.title, x, 78, w, s.focus);
+    let target = editor_field(2, "Executable or shortcut", s.draft.target, x, 146, w - 88, title.focus);
+    let browse = ui.button("Browse", x + w - 80, 168, 80, 34);
+    let directory = editor_field(3, "Working directory (blank uses default)", s.draft.working_directory, x, 214, w, target.focus);
+    let args = editor_field(4, "Arguments (JSON array of strings)",
+        s.arguments_text,
+        x, 282, w, directory.focus);
+    let description = editor_field(5, "Description", s.draft.description, x, 350, w, args.focus);
+    let developer = editor_field(6, "Developer", s.draft.developer, x, 418, 234, description.focus);
+    let year = editor_field(7, "Release year", s.draft.release_year, x + 246, 418, 104, developer.focus);
+    let tags = editor_field(8, "Tags (comma separated)", s.tags_text, x, 486, w, year.focus);
+    let artwork = ui.button("Choose cover", x, 558, 166, 36);
+    let favorite = ui.button(if s.draft.favorite { "* Favorite" } else { "Mark favorite" }, x + 178, 558, 172, 36);
+    let save = ui.button("Save changes", x, 610, 166, 42);
+    let launch = ui.button("Play", x + 178, 610, 172, 42);
+    let discard = ui.button("Discard changes", x, 666, 166, 32);
+    let remove = if s.draft.id != "" { ui.button(if s.removing { "Confirm removal" } else { "Remove entry" }, x + 178, 666, 172, 32) } else { false };
+    let parsed_args = match json_parse(args.value) {
+        Ok(JsonArray(values)) => if Array.all(values, |v| match v { JsonString(text) => true, _ => false }) {
+            Some(Array.map(values, |v| match v { JsonString(text) => text, _ => "" }))
+        } else { None },
+        _ => None,
+    };
+    let next = State {
+        draft: library.Game { title: title.value, target: target.value,
+            working_directory: directory.value, arguments: parsed_args.unwrap_or(s.draft.arguments),
+            description: description.value, developer: developer.value, release_year: year.value,
+            tags: Array.filter(Array.map(tags.value.split(","), |tag| tag.trim()), |tag| tag != ""),
+            favorite: if favorite { !s.draft.favorite } else { s.draft.favorite }, ..s.draft },
+        focus: tags.focus, arguments_text: args.value, tags_text: tags.value, ..s };
+    if browse { select_target(next) }
+    else if artwork {
+        let path = platform.pick_file(true);
+        if path == "" { next } else { State { artwork_source: path, status: "Cover selected. Save changes to copy it into your library.", ..next } }
+    } else if discard {
+        State { draft: s.original, artwork_source: "", removing: false,
+            arguments_text: args_text(s.original.arguments), tags_text: Array.join(s.original.tags, ", "),
+            status: "Changes discarded.", ..s }
+    } else if save || (ui.down(341) && ui.key(83)) {
+        if parsed_args.is_none() { message(next, "Arguments must be a JSON array of strings, for example [\"--windowed\"].") }
+        else { save_game(next) }
+    } else if launch {
+        if parsed_args.is_none() { message(next, "Correct the arguments before launching.") } else { play(next) }
+    } else if remove {
+        if s.removing { remove_game(next) }
+        else { State { removing: true, status: "Remove this library entry? Game files will be kept. Click Confirm removal.", ..next } }
+    } else { next }
+}
+
+let keyboard (s: State): State =
+    if ui.down(341) && ui.key(70) { State { focus: 0, ..s } }
+    else if ui.key(258) { State { focus: if ui.down(340) { (s.focus + 8) % 9 } else { (s.focus + 1) % 9 }, ..s } }
+    else if ui.key(256) { State { focus: -1, removing: false, ..s } }
+    else { s }
+
+let loop (s: State): Unit =
+    if ui.done(()) { ui.close(()) }
+    else {
+        ui.begin(());
+        let navigation = draw_navigation(keyboard(s));
+        let grid = draw_grid(navigation);
+        let next = draw_editor(grid);
+        ui.rect(168, ui.height(()) - 58, ui.width(()) - 168, 58, 1580068);
+        ui.clip(194, ui.height(()) - 48, ui.width(()) - 218, 42);
+        let status = if next.status != "" { next.status }
+            else if dirty(next) { "Unsaved changes" }
+            else { "Tab moves between fields. Ctrl+F searches. Ctrl+S saves." };
+        ui.text(status, 196, ui.height(()) - 38, 15, if next.blocked { 15179927 } else { 11187654 });
+        ui.unclip(());
+        ui.end(());
+        loop(next)
+    }
+
+let start (root: String): Unit = {
+    let prepared = Result.and_then(platform.ensure_dir(root), |ignored| platform.ensure_dir(root.concat("/artwork")));
+    let loaded = Result.and_then(prepared, |ignored| library.load(root.concat("/library.json")));
+    let lib = loaded.unwrap_or(library.empty(()));
+    let status = match loaded { Ok(value) => "", Err(e) => "Library could not be opened. Saving is disabled: ".concat(e) };
+    ui.init(());
+    loop(State { lib: lib, draft: library.draft(()), original: library.draft(()), root: root,
+        query: "", favorites: false, focus: -1, scroll: 0, artwork_source: "",
+        status: status, blocked: loaded.is_err(), removing: false, arguments_text: "[]", tags_text: "" })
+}
+
+let main (): Unit = match platform.data_root(()) {
+    Ok(root) => start(root),
+    Err(e) => { Os.write_stderr(e.concat("\n")); Os.exit_with(1) },
+}

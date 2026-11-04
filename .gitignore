@@ -1,0 +1,7 @@
+/build/
+/.cache/
+/.mise-data/
+/.mise-cache/
+/.mise-state/
+__pycache__/
+*.pyc
