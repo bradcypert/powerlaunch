@@ -1,20 +1,26 @@
 """Real child survival, literal argv, working-directory and launch-error checks."""
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
 suffix = ".exe" if os.name == "nt" else ""
-with tempfile.TemporaryDirectory(prefix="powerlaunch process Café ") as directory:
+with tempfile.TemporaryDirectory(prefix="powerlaunch process ") as directory:
     tmp = Path(directory)
     helper = tmp / f"game helper Café{suffix}"
+    compiled_helper = tmp / f"compiled-helper{suffix}"
     driver = tmp / f"launcher{suffix}"
-    helper_command = ["clang", str(ROOT / "tests/process_helper.c"), "-o", str(helper)]
+    # GNU ld on Windows may not accept a Unicode output filename. Compile the
+    # fixture to ASCII, then use Python's Unicode filesystem support to stage
+    # it. The actual launcher still executes a Unicode/spaced target and cwd.
+    helper_command = ["clang", str(ROOT / "tests/process_helper.c"), "-o", str(compiled_helper)]
     if os.name == "nt":
         helper_command += ["-lshell32"]
     subprocess.run(helper_command, check=True)
+    shutil.copy2(compiled_helper, helper)
     command = ["clang", "-Wall", "-Wextra", "-Werror", str(ROOT / "tests/process_driver.c"),
                str(ROOT / "app/native/process.c"), "-o", str(driver)]
     if os.name == "nt":
