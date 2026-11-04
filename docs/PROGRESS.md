@@ -51,6 +51,12 @@ Verified on Linux during initial implementation:
 Windows and macOS still require execution on those platforms. No Windows-ready
 release or clean-machine package has been validated.
 
+The first Windows CI runs now pass all seven Plum tests, the real process
+integration checks (including Unicode executable/cwd paths), compilation, and
+recursive DLL packaging. The hosted runner's missing OpenGL driver blocked the
+window smoke test; the workflow now supplies Mesa only to a disposable test copy.
+The normal downloadable package uses the user's Windows graphics driver.
+
 ## Still required for milestone 1 / product completion
 
 - Windows compile/run, Unicode paths/arguments, shortcut preservation, and

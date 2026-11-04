@@ -19,11 +19,12 @@ Extract the complete ZIP, keep its DLLs beside `powerlaunch.exe`, and run the
 executable. You do not need Plum, Clang, Python, Mise, or MSYS2 to run that bundle.
 These are unsigned development builds, retained for 30 days, rather than releases.
 
-CI also tries to render and close the packaged window with development tools
-removed from `PATH`. Screenshots, logs, and the package inventory are uploaded as
-**windows-build-diagnostics**. A runner without an OpenGL-capable display cannot
-establish interactive GUI correctness; test the download on a normal Windows PC
-before treating it as a validated release.
+CI also renders and closes a copy of the packaged window with development tools
+removed from `PATH`. Hosted runners lack an OpenGL display driver, so this test
+adds Mesa software rendering to a disposable copy **after** producing the download.
+Mesa DLLs are excluded from the downloadable bundle. Screenshots, logs, and the
+package inventory are uploaded as **windows-build-diagnostics**. Test the download
+on a normal Windows PC before treating it as a validated release.
 
 ## Development
 
