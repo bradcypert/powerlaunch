@@ -40,6 +40,11 @@ def environment():
     env = os.environ.copy()
     env["PATH"] = str(Path(PLUM).parent) + os.pathsep + env["PATH"]
     driver = shlex.split(env.get("PLUM_CC", "clang")) + flags
+    if env.get("POWERLAUNCH_SANITIZE") == "1":
+        if sys.platform != "linux":
+            raise SystemExit("The address/leak sanitizer workload currently requires Linux.")
+        driver += ["-fsanitize=address", "-fno-omit-frame-pointer"]
+        env["PLUM_NO_BUILD_CACHE"] = "1"
     env["PLUM_CC"] = shlex.join(driver)
     env.setdefault("PLUM_CACHE", str(ROOT / ".cache" / "plum"))
     options = [item for lib in libraries for item in ("--link-lib", lib)]
@@ -49,9 +54,21 @@ def environment():
 def build():
     BUILD.mkdir(exist_ok=True)
     env, options = environment()
-    subprocess.run([PLUM, "build", "app", "-o", str(EXE), *options],
+    if os.name == "nt":
+        windres = shutil.which("windres") or shutil.which("llvm-windres")
+        if not windres:
+            raise SystemExit("Install MSYS2 binutils (windres) to embed the Windows application icon.")
+        resource = BUILD / "powerlaunch-icon.o"
+        subprocess.run([windres, "app/native/windows.rc", "-O", "coff", "-o", str(resource)], cwd=ROOT, check=True)
+        # Plum currently exposes libraries/C sources, not prebuilt objects.
+        # A relative driver-prefix input avoids PLUM_CC's whitespace-only parsing
+        # even when the checkout path has spaces. Compile-only commands ignore
+        # the object; the final link embeds it. See PLUM-CANDIDATES.md.
+        env["PLUM_CC"] += " -Wno-unused-command-line-argument build/powerlaunch-icon.o"
+    output = BUILD / "powerlaunch-asan" if env.get("POWERLAUNCH_SANITIZE") == "1" else EXE
+    subprocess.run([PLUM, "build", "app", "-o", str(output), *options],
                    cwd=ROOT, env=env, check=True)
-    print(f"Built {EXE}")
+    print(f"Built {output}")
 
 
 if __name__ == "__main__":

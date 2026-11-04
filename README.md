@@ -70,24 +70,32 @@ Install Clang, Python 3, pkg-config, and raylib. The current build expects
 pkg-config to find raylib, and tinyfiledialogs uses the system's dialog helper.
 macOS execution and app-bundle packaging remain unverified.
 
-## Prototype use
+## Using the library
+
+The library opens as a cover shelf. Select a game (or use Tab, arrow keys, and
+Enter) to see its details and Play button. **Edit game** opens a separate editor.
+Tag and sorting controls open explicit choice lists; search also matches tags.
+The native Windows caption adopts the dark theme and keeps standard window
+controls, snapping and the system menu. The executable/window/taskbar use the
+Powerlaunch icon and Windows app identity.
 
 Choose **Add game**, browse to an installed executable (or a Windows `.lnk`), and
 edit its title. **Choose cover** selects artwork; **Save changes** copies it into
-the library and saves the entry. Select its card to reopen the editor. **Play**
-starts the game independently. Launching does not require saving draft changes.
+the library and saves the entry. Select its card to open details, then choose
+**Edit game** to make changes. **Play** starts the saved game independently.
 
-Arguments currently use a JSON array, e.g. `["--windowed", "two words", ""]`.
-Each string becomes exactly one argument; it is never interpreted by a shell.
-This is a temporary prototype editor: a row-per-argument control is planned.
+Use **Add argument** for each launch argument; spaces stay within that row, and
+an empty row represents an empty argument. Values are never interpreted by a shell.
 A shortcut defaults to blank arguments and working directory, preserving the
 shortcut's own settings. If you edit its target manually, review the working
 directory as well. Paths should be absolute.
 
-Tab/Shift+Tab moves among text fields, Ctrl+F focuses search, Ctrl+S saves, and
-Escape leaves a field. Use the mouse wheel over the library to scroll. Save or
-discard an edited record before opening another. Removal asks for a second click
-and keeps the game's files. Closing currently discards unsaved changes.
+Tab/Shift+Tab moves among fields and buttons, Enter/Space activates a focused
+button, Ctrl+F focuses library search, and Ctrl+S saves an editor. Escape returns
+from details/editing. Use the mouse wheel over the library or editor form to
+scroll. Dirty editors ask whether to save, discard, or keep editing before
+navigation or window close. A failed save keeps the editor open. Removal asks
+for a second click and keeps the game's files. Missing games offer **Locate game**.
 
 Data defaults to `%LOCALAPPDATA%/Powerlaunch` on Windows,
 `$XDG_DATA_HOME/powerlaunch` (or `~/.local/share/powerlaunch`) on Linux, and
@@ -106,7 +114,7 @@ mise run build
 xvfb-run -a -s '-screen 0 1600x1000x24' python3 tests/ui_smoke.py
 ```
 
-It uses a temporary library and launches only `/bin/true`.
+It uses a temporary library and launches only a harmless test executable.
 
 Packaging dependency checks run on any platform:
 
@@ -116,6 +124,25 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 On Windows, `python3 scripts/package_windows.py` builds the artifact folder after
 compilation. `python3 scripts/smoke_windows.py` checks that packaged application.
+
+## Memory checks and Plum integration
+
+```sh
+mise run memory             # 20-second, 2,000-game idle profile; needs a display
+mise run memory-check       # Linux ASan/LSan check without graphics initialization
+xvfb-run -a -s '-screen 0 1600x1000x24' python3 tests/ui_memory.py
+```
+
+`scripts/profile_memory.py --seconds 10 --games 2000 --covers 40` selects a custom
+workload. Reports and logs are in `build/`. All workloads use isolated synthetic
+libraries. Windows CI uploads working-set/private-commit samples; Linux CI runs
+the ownership workload with address/leak sanitizers. These checks are evidence
+for particular workloads, not a proof of Plum's guarantees across every program.
+
+See [memory measurements](docs/MEMORY.md) and [Plum upstream candidates](docs/PLUM-CANDIDATES.md).
+The latter are discussion notes; no upstream issues have been filed automatically.
+Icon assets are checked in. To regenerate them from the SVG on a developer
+machine with librsvg, run `python3 scripts/generate_icons.py`.
 
 ## Source layout
 

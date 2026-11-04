@@ -15,6 +15,18 @@ prototype is a vertical slice, not completion of that specification.
   Failed loads disable saving; malformed data is never silently replaced.
 - Plum-owned window layout and state, cover grid/editor, metadata fields,
   file selection, managed artwork import, save/discard, and launch actions.
+- A cohesive library-first design, shared button/typography/color tokens in Plum,
+  explicit detail/edit views, tag/sort menus, and visible keyboard focus.
+- Original SVG branding, embedded multi-size Windows ICO/version resources,
+  runtime window icon, stable Windows app identity, and a dark native caption.
+  Standard Windows caption controls and snapping behavior are preserved.
+- Friendly argument rows, save/discard/cancel on unsaved navigation/window close,
+  target relocation, and invalid/unavailable-artwork feedback.
+- Cached search/filter/sort results, so an idle frame does not repeatedly rebuild
+  the library. Queries are recomputed on relevant model/filter changes.
+- OS-level memory reports, a bounded cover-cache stress workload, and a
+  graphics-free ASan/LSan ownership workload using production model operations.
+  Linux and Windows CI retain diagnostics; see `MEMORY.md`.
 - Native raylib/raygui ABI adaptation, lazy cover loading with a 24-texture
   cache and downsampled GPU textures.
 - A generic native detached-process builder with literal argv and per-child cwd.
@@ -57,29 +69,45 @@ render/exit check. The artifact contains `powerlaunch.exe`, `glfw3.dll`,
 The hosted runner has no OpenGL driver, so CI supplies Mesa/llvmpipe only to a
 disposable test copy. The uploaded bundle was inspected and contains no Mesa
 DLLs; it uses the user's normal Windows graphics driver. Its screenshot was
-visually inspected. macOS execution, normal Windows GPU validation, shortcut
-integration, and clean-machine/manual interaction tests remain outstanding.
+visually inspected. The maintainer subsequently confirmed adding a game,
+launching it, adding artwork, and game survival after launcher closure on a real
+Windows machine. The redesigned caption/icon and broader manual interaction
+checks still need desktop validation. macOS execution and shortcut integration
+remain outstanding.
+
+## Design and memory pass
+
+- Eight Plum tests and the process integration checks pass locally.
+- Real-input UI tests cover registration, the separate detail/editor views,
+  literal/empty argument rows, tag/sort menus, keyboard selection, Play, and
+  save/cancel behavior when navigating away or closing a dirty editor.
+- Native Windows chrome adapters cross-compile, and the actual linked PE icon
+  resource is verified by packaging rather than relying on a source-file check.
+- The graphics-free 250-cycle/100-game ASan/LSan workload passed locally without
+  invalid-access or leak findings. Short working-set tests and the bounded cache
+  test are recorded in `MEMORY.md`; none establishes universal leak freedom.
+- Upstream opportunities are in `PLUM-CANDIDATES.md`. No issues have been filed.
 
 ## Still required for milestone 1 / product completion
 
-- Manual Windows GPU/desktop checks, shortcut preservation, and clean-machine
-  runtime packaging. CI now verifies compilation, Unicode process paths and
-  arguments, and a software-rendered packaged window.
+- Manual Windows verification of the new icon/caption, shortcut preservation,
+  and clean-machine runtime packaging. CI verifies compilation, Unicode process
+  paths and arguments, and a software-rendered packaged window.
 - Thorough keyboard navigation, button focus, screen-reader accessibility,
   international font/input coverage, IME, and real multi-monitor/high-DPI checks.
-- Multiline description editing and a friendly row-per-argument editor. Prototype
-  fields are single-line and cap editable input at 16 KiB per field; longer
+- Multiline description editing. Text fields are currently single-line and cap
+  editable input at 16 KiB per field; longer
   existing values remain unchanged rather than being truncated.
-- Unsaved-change confirmation on window close. Current save/discard protection
-  applies when switching records, not exiting.
-- Distinct read-only detail view, explicit tag filters, alternative sort options,
-  missing-target relocation flow, and fully responsive layouts at large scaling.
-- Artwork decode errors in the UI, persistent disk thumbnails, shared artwork
+- Fully responsive layouts at large scaling and further missing-target/shortcut
+  edge cases on real Windows machines.
+- Persistent disk thumbnails, shared artwork
   reference tracking, and orphan cleanup. Current imports keep old artwork to
   avoid deleting data still needed after a failed save; removal retains covers.
 - Full backup/restore with artwork, automatic pre-restore backup, schema
   migrations, recovery controls, and concurrent-instance conflict handling.
-- Benchmark a few thousand games. Current search and sort are synchronous.
+- Extend the 2,000-game memory measurements to longer sessions, richer artwork,
+  launch/repair workflows, and 5,000-game response-time benchmarks. Search/sort
+  are cached but synchronous when their inputs change.
 - Pin raylib for release builds and test native dependency bundling/licensing.
 - Propose reusable cwd/detached-process functionality upstream in Plum after
   validating API and ownership semantics independently of this application.

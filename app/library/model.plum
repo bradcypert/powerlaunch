@@ -73,6 +73,25 @@ pub let search (lib: Library) (query: String) (favorites: Bool): Array[Game] = {
         |a, b| a.title.to_lower() <= b.title.to_lower())
 }
 
+pub let browse (lib: Library) (query: String) (favorites: Bool) (tag: String) (sort: Int): Array[Game] = {
+    let found = Array.filter(search(lib, query, favorites), |g| tag == "" || Array.contains(g.tags, tag));
+    if sort == 1 { Array.reverse(found) }
+    else if sort == 2 { Array.sort_by(found, |a, b|
+        (if a.release_year == "" { "9999" } else { a.release_year }) <=
+        (if b.release_year == "" { "9999" } else { b.release_year })) }
+    else { found }
+}
+
+pub let all_tags (lib: Library): Array[String] = {
+    let tags: Array[String] = [];
+    for game in lib.games {
+        for tag in game.tags {
+            if !Array.contains(tags, tag) { tags = tags.push(tag); };
+        };
+    };
+    Array.sort_by(tags, |a, b| a.to_lower() <= b.to_lower())
+}
+
 let string_values (values: Array[String]): JsonValue =
     JsonArray(Array.map(values, |s| JsonString(s)))
 
@@ -213,4 +232,15 @@ pub let test_reject_duplicate_ids_and_unsafe_paths (): Unit = {
     assert(Result.is_err(decode(must_text(encode(Library { games: [escaping], next_id: 2 })))));
     assert(Result.is_err(validate(Game { target: "relative/game", ..game })));
     assert(Result.is_err(validate(Game { arguments: ["bad\u{0000}argument"], ..game })))
+}
+
+pub let test_browse_tags_sort_and_favorites (): Unit = {
+    let a = Game { title: "Zeta", target: "/game-a", release_year: "1987", tags: ["Adventure"], favorite: true, ..draft(()) };
+    let b = Game { title: "Alpha", target: "/game-b", release_year: "2004", tags: ["Adventure", "Puzzle"], ..draft(()) };
+    let lib = must_lib(upsert(must_lib(upsert(empty(()), a)), b));
+    assert_eq(browse(lib, "", false, "Adventure", 2)[0].title, "Zeta");
+    assert_eq(browse(lib, "", false, "Puzzle", 0).len(), 1);
+    assert_eq(browse(lib, "", true, "Adventure", 0).len(), 1);
+    assert_eq(browse(lib, "", false, "", 1)[0].title, "Zeta");
+    assert_eq(all_tags(lib), ["Adventure", "Puzzle"])
 }

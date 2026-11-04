@@ -1,0 +1,34 @@
+use library;
+use Os;
+
+// Exercises production model/persistence operations without opening the graphics
+// driver. Sanitizers can then attribute ownership errors independently of Mesa.
+pub let run (cycles: Int): Unit = {
+    let lib = library.empty(());
+    for i in 0..100 {
+        let game = library.Game { title: "Memory fixture ".concat(i.to_string()),
+            target: "/memory-fixture/game", arguments: ["", "two words", "Café"],
+            tags: ["Adventure", "Test"], ..library.draft(()) };
+        lib = library.upsert(lib, game).unwrap_or(library.empty(()));
+    };
+    assert_eq(lib.games.len(), 100);
+    let dir = Os.temp_dir(()).unwrap_or("");
+    assert(dir != "");
+    let path = dir.concat("/library.json");
+    for i in 0..cycles {
+        let game = library.Game { description: "Iteration ".concat(i.to_string()), ..lib.games[i % lib.games.len()] };
+        lib = library.upsert(lib, game).unwrap_or(library.empty(()));
+        let visible = library.browse(lib, "fixture", false, "Adventure", i % 3);
+        assert_eq(visible.len(), 100);
+        let text = library.encode(lib).unwrap_or("");
+        lib = library.decode(text).unwrap_or(library.empty(()));
+        assert_eq(lib.games.len(), 100);
+        if i % 25 == 0 {
+            assert(Result.is_ok(library.save(path, lib)));
+            lib = library.load(path).unwrap_or(library.empty(()));
+            assert_eq(lib.games.len(), 100);
+        };
+    };
+    assert(Result.is_ok(Os.remove_tree(dir)));
+    println("Memory workload passed: ".concat(cycles.to_string()).concat(" edit/filter/sort/JSON cycles; 100 games."))
+}

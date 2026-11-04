@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import struct
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,35 @@ def imports(binary, objdump):
 
 def file_index(directory):
     return {path.name.casefold(): path for path in directory.iterdir() if path.is_file()}
+
+
+def verify_app_icon(executable):
+    """Check the actual linked PE, so a missing resource object cannot go unnoticed."""
+    data = executable.read_bytes()
+    try:
+        pe = struct.unpack_from('<I', data, 0x3c)[0]
+        if data[:2] != b'MZ' or data[pe:pe+4] != b'PE\0\0':
+            raise ValueError('not a PE executable')
+        optional = pe + 24
+        if struct.unpack_from('<H', data, optional)[0] != 0x20b:
+            raise ValueError('expected a Windows x64 PE32+ executable')
+        resource_rva = struct.unpack_from('<I', data, optional + 112 + 2*8)[0]
+        sections = optional + struct.unpack_from('<H', data, pe + 20)[0]
+        root = None
+        for i in range(struct.unpack_from('<H', data, pe + 6)[0]):
+            virtual_size, virtual, raw_size, raw = struct.unpack_from('<IIII', data, sections + i*40 + 8)
+            if virtual <= resource_rva < virtual + max(virtual_size, raw_size):
+                root = raw + resource_rva - virtual
+                break
+        if root is None:
+            raise ValueError('no resource directory')
+        named, numbered = struct.unpack_from('<HH', data, root + 12)
+        types = {struct.unpack_from('<I', data, root + 16 + i*8)[0] for i in range(named + numbered)}
+        if not {3, 14}.issubset(types):
+            raise ValueError('missing icon images or icon group')
+    except (ValueError, struct.error) as error:
+        raise SystemExit(f'The Windows app icon was not embedded: {error}')
+    print('Verified icon images and icon group in the linked Windows executable.')
 
 
 def runtime_dependencies(executable, runtime_directory, system_directory, inspect):
@@ -55,6 +85,7 @@ def package():
     executable = ROOT / "build/powerlaunch.exe"
     if not executable.is_file():
         raise SystemExit("Build powerlaunch.exe with mise run build first.")
+    verify_app_icon(executable)
     prefix = Path(subprocess.check_output(
         ["pkg-config", "--variable=prefix", "raylib"], text=True).strip())
     runtime = prefix / "bin"

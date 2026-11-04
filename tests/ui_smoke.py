@@ -1,142 +1,90 @@
-"""Optional Linux/X11 integration test. Run in an isolated Xvfb display.
-
-Exercises actual mouse/key events rather than a second implementation of the UI.
-Requires libX11 and libXtst; writes only a temporary library and build screenshots.
-"""
+"""Real input integration: browse/detail/edit, arguments, unsaved close and launch."""
 from pathlib import Path
-import ctypes as C
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import time
+from ui_driver import Driver, key, type_text
 
 ROOT = Path(__file__).resolve().parents[1]
-x = C.CDLL("libX11.so.6")
-t = C.CDLL("libXtst.so.6")
-D, U, I = C.c_void_p, C.c_ulong, C.c_int
-x.XOpenDisplay.argtypes, x.XOpenDisplay.restype = [C.c_char_p], D
-x.XDefaultRootWindow.argtypes, x.XDefaultRootWindow.restype = [D], U
-x.XQueryTree.argtypes = [D, U, C.POINTER(U), C.POINTER(U), C.POINTER(C.POINTER(U)), C.POINTER(C.c_uint)]
-x.XFetchName.argtypes = [D, U, C.POINTER(C.c_char_p)]
-x.XFree.argtypes = [D]
-x.XFlush.argtypes = [D]
-x.XSetInputFocus.argtypes = [D, U, I, U]
-x.XKeysymToKeycode.argtypes, x.XKeysymToKeycode.restype = [D, U], C.c_ubyte
-x.XkbKeycodeToKeysym.argtypes, x.XkbKeycodeToKeysym.restype = [D, C.c_ubyte, I, I], U
-x.XTranslateCoordinates.argtypes = [D, U, U, I, I, C.POINTER(I), C.POINTER(I), C.POINTER(U)]
-t.XTestFakeKeyEvent.argtypes = [D, C.c_uint, I, U]
-t.XTestFakeButtonEvent.argtypes = [D, C.c_uint, I, U]
-t.XTestFakeMotionEvent.argtypes = [D, I, I, I, U]
-display = x.XOpenDisplay(None)
-assert display, "Start this test inside xvfb-run"
-root = x.XDefaultRootWindow(display)
-
-
-def window():
-    parent, base, children, count = U(), U(), C.POINTER(U)(), C.c_uint()
-    x.XQueryTree(display, root, C.byref(base), C.byref(parent), C.byref(children), C.byref(count))
-    found = None
-    for i in range(count.value):
-        name = C.c_char_p()
-        if x.XFetchName(display, children[i], C.byref(name)) and name.value:
-            if name.value == b"Powerlaunch":
-                found = children[i]
-            x.XFree(C.cast(name, D))
-    if children:
-        x.XFree(children)
-    return found
-
-
-def event_key(symbol, pressed):
-    t.XTestFakeKeyEvent(display, x.XKeysymToKeycode(display, symbol), pressed, 0)
-    x.XFlush(display)
-    time.sleep(0.025)
-
-
-def key(symbol):
-    event_key(symbol, 1)
-    event_key(symbol, 0)
-
-
-def type_text(text):
-    for char in text:
-        symbol = ord(char)
-        code = x.XKeysymToKeycode(display, symbol)
-        shift = x.XkbKeycodeToKeysym(display, code, 0, 0) != symbol
-        if shift:
-            event_key(0xFFE1, 1)
-        key(symbol)
-        if shift:
-            event_key(0xFFE1, 0)
-
-
 with tempfile.TemporaryDirectory(prefix="powerlaunch-ui-") as directory:
     env = os.environ.copy()
-    env["POWERLAUNCH_DATA_DIR"] = directory
+    env.update(POWERLAUNCH_DATA_DIR=directory, POWERLAUNCH_MEMORY_REPORT="1", PLUM_RT_STATS="1")
+    marker = Path(directory) / "launched"
+    fixture = Path(directory) / "fixture-game.sh"
+    fixture.write_text("#!/bin/sh\nprintf started > " + shlex.quote(str(marker)) + "\n")
+    fixture.chmod(0o700)
     log = open(ROOT / "build/ui-smoke.log", "w")
     app = subprocess.Popen([str(ROOT / "build/powerlaunch")], env=env, stdout=log, stderr=log)
+    library = Path(directory) / "library.json"
     try:
-        deadline = time.monotonic() + 10
-        target = None
-        while not target and time.monotonic() < deadline:
-            target = window()
-            time.sleep(0.1)
-        assert target, "Application did not open a window"
-        time.sleep(0.4)
-        x.XSetInputFocus(display, target, 2, 0)
-        ox, oy, child = I(), I(), U()
-        x.XTranslateCoordinates(display, target, root, 0, 0, C.byref(ox), C.byref(oy), C.byref(child))
-
-        def click(px, py):
-            t.XTestFakeMotionEvent(display, -1, ox.value + px, oy.value + py, 0)
-            x.XFlush(display)
-            time.sleep(0.05)
-            t.XTestFakeButtonEvent(display, 1, 1, 0)
-            x.XFlush(display)
-            time.sleep(0.05)
-            t.XTestFakeButtonEvent(display, 1, 0, 0)
-            x.XFlush(display)
-            time.sleep(0.1)
-
-        click(960, 116)
+        driver = Driver()
+        driver.click(90, 286)  # Add game, separate editor.
+        driver.click(600, 142)
         type_text("Test game")
-        click(960, 184)
-        type_text("/bin/true")
-        click(960, 252)
+        driver.click(600, 220)
+        type_text(str(fixture))
+        driver.click(600, 536)
         type_text("/tmp")
-        click(960, 320)
-        key(0xFF57)
-        key(0xFF08)
-        key(0xFF08)
-        type_text('["two words", ""]')
-        click(960, 524)
+        driver.click(600, 458)
         type_text("Adventure, CD-ROM")
-        click(960, 632)
-        library = Path(directory) / "library.json"
-        deadline = time.monotonic() + 3
-        while not library.exists() and time.monotonic() < deadline:
-            time.sleep(0.1)
+        driver.click(560, 658)  # Add first argument.
+        driver.click(560, 658)
+        type_text("two words")
+        driver.click(560, 710)  # Add empty second argument.
+        driver.click(1170, 48)  # Save -> detail view.
+        time.sleep(0.2)
         assert library.exists(), "Save changes did not create the library"
         saved = json.loads(library.read_text())
         assert saved["games"][0]["title"] == "Test game", saved
         assert saved["games"][0]["tags"] == ["Adventure", "CD-ROM"], saved
         assert saved["games"][0]["arguments"] == ["two words", ""], saved
-        click(960, 116)
-        key(0xFF57)  # End
+        driver.click(280, 46)  # Back to the library.
+        driver.click(300, 120)
+        driver.click(300, 209)  # Explicit Adventure tag option.
+        driver.click(1160, 120)
+        driver.click(1100, 209)  # Explicit Z-to-A sort option.
+        key(0xFF09)  # Tab from sort control to the grid.
+        key(0xFF0D)  # Enter opens the selected game.
+        time.sleep(0.1)
+        assert not marker.exists(), "Enter should open details without also launching"
+        driver.click(710, 264)  # Edit game.
+        driver.click(600, 142)
+        key(0xFF57)
         for _ in range(len("Test game")):
-            key(0xFF08)  # Backspace
+            key(0xFF08)
         type_text("Edited game")
-        click(960, 632)
+        driver.click(90, 155)  # Leaving editor must ask about unsaved changes.
+        driver.click(812, 467)  # Keep editing.
+        assert json.loads(library.read_text())["games"][0]["title"] == "Test game"
+        driver.chord(ord('s'))
         time.sleep(0.2)
         assert json.loads(library.read_text())["games"][0]["title"] == "Edited game"
-        click(1160, 632)  # Play a real harmless executable.
+        driver.click(560, 264)  # Play a harmless real executable.
         assert app.poll() is None, "Launching closed the launcher"
+        deadline = time.monotonic() + 3
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), "The Play action did not launch the test game"
+        driver.click(710, 264)
+        driver.click(600, 302)
+        type_text("Changed description")
+        driver.close()  # WM close must preserve a dirty editor.
+        assert app.poll() is None, "Window close silently discarded unsaved edits"
+        driver.click(812, 467)
+        driver.chord(ord('s'))
+        time.sleep(0.2)
+        assert json.loads(library.read_text())["games"][0]["description"] == "Changed description"
+        driver.close()  # Clean close must now work.
+        assert app.wait(timeout=5) == 0
     finally:
-        app.terminate()
-        app.wait(timeout=5)
+        if app.poll() is None:
+            app.terminate()
+            app.wait(timeout=5)
         log.close()
-    env.update(POWERLAUNCH_SMOKE_FRAMES="3", POWERLAUNCH_SCREENSHOT=str(ROOT / "build/library-smoke.png"))
+    env.update(POWERLAUNCH_SMOKE_FRAMES="4", POWERLAUNCH_SCREENSHOT=str(ROOT / "build/library-smoke.png"))
     subprocess.run([str(ROOT / "build/powerlaunch")], env=env, stdout=subprocess.DEVNULL, check=True)
     assert json.loads(library.read_text())["games"][0]["title"] == "Edited game"
-    print("UI integration: register, edit, save, tags, launch, and reload passed.")
+    print("UI integration: registration, detail/edit, argument rows, tags, launch, unsaved navigation/close, and reload passed.")

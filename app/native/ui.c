@@ -10,14 +10,18 @@
 #define NOUSER
 #include <windows.h>
 #include <limits.h>
+void pl_windows_prepare(void);
+void pl_windows_style(void *window);
 #endif
+#include "icon_data.h"
 #define RAYGUI_IMPLEMENTATION
 #include "../vendor/raygui.h"
 
-#define FIELDS 16
 #define FIELD_BYTES 16384
 #define TEXTURES 24
-static char fields[FIELDS][FIELD_BYTES];
+/* One borrowed widget scratch buffer. Plum copies the result immediately;
+ * records and editor state remain Plum values, not retained C buffers. */
+static char field_buffer[FIELD_BYTES];
 static float scale = 1;
 static Font font;
 static int custom_font;
@@ -27,6 +31,11 @@ static Cover covers[TEXTURES];
 static unsigned int clock_tick;
 static Rectangle clip_stack[8];
 static int clip_depth;
+static Texture2D logo;
+static int close_requested;
+static int peak_textures;
+static unsigned long long peak_texture_bytes;
+static int input_enabled = 1;
 
 #ifdef _WIN32
 /* raylib's default fopen path need not be UTF-8 on Windows. Keep cover and
@@ -63,18 +72,29 @@ static Rectangle box(long long x, long long y, long long w, long long h) {
     return (Rectangle){(float)x, (float)y, (float)w, (float)h};
 }
 void pl_ui_init(void) {
+#ifdef _WIN32
+    pl_windows_prepare();
+#endif
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI);
     InitWindow(1280, 820, "Powerlaunch");
     if (!IsWindowReady()) {
         fprintf(stderr, "Powerlaunch could not open a graphics window. Check your display and OpenGL drivers.\n");
         exit(1);
     }
-    SetWindowMinSize(1060, 780);
+    SetWindowMinSize(920, 720);
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
 #ifdef _WIN32
     SetLoadFileDataCallback(utf8_file_data);
+    pl_windows_style(GetWindowHandle());
 #endif
+    Image icon = LoadImageFromMemory(".png", powerlaunch_icon, sizeof powerlaunch_icon);
+    if (icon.data) {
+        SetWindowIcon(icon);
+        logo = LoadTextureFromImage(icon);
+        SetTextureFilter(logo, TEXTURE_FILTER_BILINEAR);
+        UnloadImage(icon);
+    }
 #ifdef _WIN32
     const char *face = "C:/Windows/Fonts/segoeui.ttf";
 #elif defined(__APPLE__)
@@ -91,14 +111,14 @@ void pl_ui_init(void) {
         custom_font = font.texture.id != 0;
         if (custom_font) { SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR); GuiSetFont(font); }
     }
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 18);
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 17);
     GuiSetStyle(DEFAULT, TEXT_SPACING, 0);
-    GuiSetStyle(DEFAULT, BACKGROUND_COLOR, 0x181C24ff);
-    GuiSetStyle(DEFAULT, BORDER_COLOR_NORMAL, 0x3C495Dff);
-    GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, 0x232A36ff);
-    GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, 0xEEF0F4ff);
-    GuiSetStyle(DEFAULT, BORDER_COLOR_FOCUSED, 0x819BCBff);
-    GuiSetStyle(DEFAULT, BASE_COLOR_FOCUSED, 0x334563ff);
+    GuiSetStyle(DEFAULT, BACKGROUND_COLOR, 0x171A23ff);
+    GuiSetStyle(DEFAULT, BORDER_COLOR_NORMAL, 0x414A60ff);
+    GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, 0x1C202Bff);
+    GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, 0xEDF0F7ff);
+    GuiSetStyle(DEFAULT, BORDER_COLOR_FOCUSED, 0xB9A7F2ff);
+    GuiSetStyle(DEFAULT, BASE_COLOR_FOCUSED, 0x2F3048ff);
     GuiSetStyle(DEFAULT, TEXT_COLOR_FOCUSED, 0xFFFFFFFF);
     GuiSetStyle(DEFAULT, BORDER_COLOR_PRESSED, 0x819BCBff);
     GuiSetStyle(DEFAULT, BASE_COLOR_PRESSED, 0x415B86ff);
@@ -106,8 +126,10 @@ void pl_ui_init(void) {
 }
 int pl_ui_done(void) {
     const char *limit = getenv("POWERLAUNCH_SMOKE_FRAMES");
-    return WindowShouldClose() || (limit && frame >= atoi(limit));
+    if (WindowShouldClose()) close_requested = 1;
+    return limit && frame >= atoi(limit);
 }
+int pl_ui_close_requested(void) { int value = close_requested; close_requested = 0; return value; }
 void pl_ui_begin(void) {
     scale = GetWindowScaleDPI().x;
     const char *override = getenv("POWERLAUNCH_UI_SCALE");
@@ -116,7 +138,7 @@ void pl_ui_begin(void) {
     if (scale > 3) scale = 3;
     SetMouseScale(1 / scale, 1 / scale);
     BeginDrawing();
-    ClearBackground(color(0x181C24));
+    ClearBackground(color(0x171A23));
     Camera2D camera = {0}; camera.zoom = scale;
     BeginMode2D(camera);
 }
@@ -132,18 +154,39 @@ void pl_ui_close(void) {
     for (int i = 0; i < TEXTURES; i++) {
         if (covers[i].image.id) UnloadTexture(covers[i].image);
         free(covers[i].path);
+        covers[i] = (Cover){0};
     }
+    if (logo.id) UnloadTexture(logo);
     if (custom_font) UnloadFont(font);
     CloseWindow();
+    if (getenv("POWERLAUNCH_MEMORY_REPORT"))
+        fprintf(stderr, "[powerlaunch-native] peak_textures=%d peak_texture_bytes=%llu textures_after_close=0\n",
+            peak_textures, peak_texture_bytes);
 }
 long long pl_ui_width(void) { return (long long)(GetScreenWidth() / scale); }
 long long pl_ui_height(void) { return (long long)(GetScreenHeight() / scale); }
-int pl_ui_key(long long key) { return IsKeyPressed((int)key); }
-int pl_ui_down(long long key) { return IsKeyDown((int)key); }
+void pl_ui_enable(int enabled) { input_enabled = enabled; if (enabled) GuiEnable(); else GuiDisable(); }
+int pl_ui_key(long long key) { return input_enabled && IsKeyPressed((int)key); }
+int pl_ui_down(long long key) { return input_enabled && IsKeyDown((int)key); }
 long long pl_ui_wheel(void) {
+    return input_enabled ? (long long)(GetMouseWheelMove() * 64) : 0;
+}
+long long pl_ui_mouse_x(void) { return (long long)GetMousePosition().x; }
+long long pl_ui_mouse_y(void) { return (long long)GetMousePosition().y; }
+int pl_ui_hover(long long x, long long y, long long w, long long h) {
     Vector2 mouse = GetMousePosition();
-    return mouse.x >= 168 && mouse.x < GetScreenWidth() / scale - 400
-        ? (long long)(GetMouseWheelMove() * 64) : 0;
+    return input_enabled && (!clip_depth || CheckCollisionPointRec(mouse, clip_stack[clip_depth - 1]))
+        && CheckCollisionPointRec(mouse, box(x, y, w, h));
+}
+int pl_ui_released(void) { return input_enabled && IsMouseButtonReleased(MOUSE_BUTTON_LEFT); }
+void pl_ui_round(long long x, long long y, long long w, long long h, long long hex) {
+    DrawRectangleRounded(box(x, y, w, h), 0.16f, 8, color(hex));
+}
+long long pl_ui_measure(const char *text, long long size) {
+    return (long long)MeasureTextEx(GuiGetFont(), text, (float)size, 0).x;
+}
+void pl_ui_logo(long long x, long long y, long long size) {
+    if (logo.id) DrawTexturePro(logo, (Rectangle){0, 0, 256, 256}, box(x, y, size, size), (Vector2){0,0}, 0, WHITE);
 }
 void pl_ui_rect(long long x, long long y, long long w, long long h, long long hex) {
     DrawRectangleRec(box(x, y, w, h), color(hex));
@@ -156,20 +199,25 @@ int pl_ui_button(const char *text, long long x, long long y, long long w, long l
 }
 int pl_ui_clicked(long long x, long long y, long long w, long long h) {
     Vector2 mouse = GetMousePosition();
-    return IsMouseButtonPressed(MOUSE_BUTTON_LEFT)
+    return input_enabled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)
         && (!clip_depth || CheckCollisionPointRec(mouse, clip_stack[clip_depth - 1]))
         && CheckCollisionPointRec(mouse, box(x, y, w, h));
 }
 void pl_ui_field(long long id, const char *text, long long x, long long y, long long w, long long h, int editing) {
-    if (id < 0 || id >= FIELDS) return;
     if (strlen(text) >= FIELD_BYTES) {
         GuiLabel(box(x, y, w, h), "Text exceeds prototype editor capacity");
         return;
     }
-    memcpy(fields[id], text, strlen(text) + 1);
-    GuiTextBox(box(x, y, w, h), fields[id], FIELD_BYTES, editing);
+    memcpy(field_buffer, text, strlen(text) + 1);
+    GuiTextBox(box(x, y, w, h), field_buffer, FIELD_BYTES, editing);
 }
-const char *pl_ui_value(long long id) { return id >= 0 && id < FIELDS ? fields[id] : ""; }
+const char *pl_ui_value(long long id) { (void)id; return field_buffer; }
+int pl_ui_image_valid(const char *path) {
+    Image image = LoadImage(path);
+    int valid = image.data != NULL;
+    if (valid) UnloadImage(image);
+    return valid;
+}
 void pl_ui_clip(long long x, long long y, long long w, long long h) {
     Rectangle next = box(x, y, w, h);
     if (clip_depth) next = GetCollisionRec(next, clip_stack[clip_depth - 1]);
@@ -185,8 +233,8 @@ void pl_ui_unclip(void) {
         BeginScissorMode((int)(r.x * scale), (int)(r.y * scale), (int)(r.width * scale), (int)(r.height * scale));
     }
 }
-void pl_ui_cover(const char *path, long long x, long long y, long long w, long long h) {
-    if (!*path) return;
+int pl_ui_cover(const char *path, long long x, long long y, long long w, long long h) {
+    if (!*path) return 0;
     clock_tick++;
     int slot = -1;
     for (int i = 0; i < TEXTURES; i++) {
@@ -214,10 +262,19 @@ void pl_ui_cover(const char *path, long long x, long long y, long long w, long l
     }
     covers[slot].used = clock_tick;
     Texture2D texture = covers[slot].image;
-    if (!texture.id) return;
+    if (!texture.id) return 0;
+    int count = 0;
+    unsigned long long bytes = 0;
+    for (int i = 0; i < TEXTURES; i++) if (covers[i].image.id) {
+        count++;
+        bytes += (unsigned long long)covers[i].image.width * covers[i].image.height * 4;
+    }
+    if (count > peak_textures) peak_textures = count;
+    if (bytes > peak_texture_bytes) peak_texture_bytes = bytes;
     float fit = (float)w / texture.width;
     if ((float)h / texture.height < fit) fit = (float)h / texture.height;
     Rectangle destination = {(float)x + ((float)w - texture.width * fit) / 2,
         (float)y + ((float)h - texture.height * fit) / 2, texture.width * fit, texture.height * fit};
     DrawTexturePro(texture, (Rectangle){0, 0, (float)texture.width, (float)texture.height}, destination, (Vector2){0, 0}, 0, WHITE);
+    return 1;
 }

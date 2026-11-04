@@ -30,7 +30,7 @@ def software_renderer(package, destination, runtime, system):
     return destination
 
 
-def smoke(use_software=False):
+def smoke(use_software=False, memory_seconds=0):
     if os.name != "nt":
         raise SystemExit("The packaged Windows smoke test must run on Windows.")
     package = ROOT / "build/package/powerlaunch-windows-x64"
@@ -62,10 +62,16 @@ def smoke(use_software=False):
             raise SystemExit("The CI window did not report the requested llvmpipe renderer.")
         print("Packaged window rendered and exited without build tools or MSYS2 on PATH."
             + (" CI-only Mesa DLLs were added to a disposable test copy." if use_software else ""))
+        if memory_seconds:
+            from profile_memory import profile
+            profile(package / "powerlaunch.exe", memory_seconds, 2000,
+                ROOT / "build/windows-memory.json", base_env=env)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--software-rendering", action="store_true",
         help="Add Mesa to a disposable copy for hosted runners without GPU drivers")
-    smoke(parser.parse_args().software_rendering)
+    parser.add_argument("--memory-seconds", type=int, default=0)
+    args = parser.parse_args()
+    smoke(args.software_rendering, args.memory_seconds)
