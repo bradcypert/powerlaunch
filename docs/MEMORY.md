@@ -46,6 +46,20 @@ allow this; use an ordinary development shell. Linux CI grants the inspection
 capability only inside its ephemeral container and does not alter host settings.
 A sanitizer setup failure is a failed check, not a pass with leak detection off.
 
+## Windows CI baseline
+
+The [first design-pass Windows run](https://github.com/bradcypert/powerlaunch/actions/runs/41904981216)
+passed the packaged-window check and the 2,000-game, ten-second memory profile.
+Working set peaked at **98.52 MiB**; working-set and private-commit growth after
+warm-up were each **4 KiB**. It recorded 944,366 cumulative Plum allocations /
+152.90 MiB of cumulative allocated bytes. This run uses CI-only Mesa and a
+different font/layout from Linux, so compare future Windows runs with this
+workload rather than treating the OS totals as interchangeable.
+
+The same run passed the graphics-free ASan/LSan workload in the Linux container.
+These are short regression baselines; ordinary Windows desktop/high-DPI checks
+and longer real-game sessions remain useful next steps.
+
 ## Reproduce and keep monitoring
 
 ```sh

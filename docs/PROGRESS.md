@@ -87,6 +87,11 @@ remain outstanding.
   invalid-access or leak findings. Short working-set tests and the bounded cache
   test are recorded in `MEMORY.md`; none establishes universal leak freedom.
 - Upstream opportunities are in `PLUM-CANDIDATES.md`. No issues have been filed.
+- [Design-pass CI](https://github.com/bradcypert/powerlaunch/actions/runs/41904981216)
+  passed both the Windows packaging/window/memory job and the Linux sanitizer
+  job. The linked Windows executable's icon resources were verified. The Windows
+  2,000-game memory sample peaked near 98.5 MiB working set with 4 KiB growth
+  after warm-up; see `MEMORY.md` for definitions and limits.
 
 ## Still required for milestone 1 / product completion
 
