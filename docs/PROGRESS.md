@@ -48,19 +48,23 @@ Verified on Linux during initial implementation:
   declarations and a portability issue in the dialog dependency. This checks
   native source compilation, not full application linking or execution.
 
-Windows and macOS still require execution on those platforms. No Windows-ready
-release or clean-machine package has been validated.
+The [successful Windows CI run](https://github.com/bradcypert/powerlaunch/actions/runs/41893481130)
+passes all seven Plum tests, the real process integration checks (including
+Unicode executable/cwd paths), compilation, recursive DLL packaging, and a window
+render/exit check. The artifact contains `powerlaunch.exe`, `glfw3.dll`,
+`libraylib.dll`, `libwinpthread-1.dll`, build metadata, and license notices.
 
-The first Windows CI runs now pass all seven Plum tests, the real process
-integration checks (including Unicode executable/cwd paths), compilation, and
-recursive DLL packaging. The hosted runner's missing OpenGL driver blocked the
-window smoke test; the workflow now supplies Mesa only to a disposable test copy.
-The normal downloadable package uses the user's Windows graphics driver.
+The hosted runner has no OpenGL driver, so CI supplies Mesa/llvmpipe only to a
+disposable test copy. The uploaded bundle was inspected and contains no Mesa
+DLLs; it uses the user's normal Windows graphics driver. Its screenshot was
+visually inspected. macOS execution, normal Windows GPU validation, shortcut
+integration, and clean-machine/manual interaction tests remain outstanding.
 
 ## Still required for milestone 1 / product completion
 
-- Windows compile/run, Unicode paths/arguments, shortcut preservation, and
-  clean-machine runtime packaging. Windows code is presently unverified.
+- Manual Windows GPU/desktop checks, shortcut preservation, and clean-machine
+  runtime packaging. CI now verifies compilation, Unicode process paths and
+  arguments, and a software-rendered packaged window.
 - Thorough keyboard navigation, button focus, screen-reader accessibility,
   international font/input coverage, IME, and real multi-monitor/high-DPI checks.
 - Multiline description editing and a friendly row-per-argument editor. Prototype
