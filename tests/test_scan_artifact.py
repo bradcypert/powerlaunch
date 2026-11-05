@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -25,7 +26,11 @@ class ArtifactEvidenceTests(unittest.TestCase):
             archive.writestr("powerlaunch.exe", self.executable)
             archive.writestr("build-info.json", '{"commit":"source-fixture"}')
             if extra:
-                archive.writestr(extra, b"unexpected")
+                entry = zipfile.ZipInfo()
+                # Preserve malformed raw ZIP spelling even on Windows, where
+                # constructing ZipInfo(name) would normalize the test fixture.
+                entry.filename = entry.orig_filename = extra
+                archive.writestr(entry, b"unexpected")
         return {"id": 12, "name": "powerlaunch-windows-x64", "expired": False,
             "workflow_run": {"id": 34, "head_sha": "source-fixture"},
             "digest": "sha256:" + hashlib.sha256(self.archive.read_bytes()).hexdigest()}
@@ -52,6 +57,12 @@ class ArtifactEvidenceTests(unittest.TestCase):
         self.archive.write_bytes(self.archive.read_bytes() + b"changed")
         with self.assertRaises(ValueError):
             self.extract(metadata)
+        self.assertFalse((self.root / "package").exists())
+
+    def test_windows_reader_normalization_does_not_hide_raw_path(self):
+        with mock.patch("zipfile.os.sep", "\\"):
+            with self.assertRaises(ValueError):
+                self.extract(self.fixture("folder\\outside"))
         self.assertFalse((self.root / "package").exists())
 
     def test_traversal_and_windows_name_collisions_are_rejected(self):

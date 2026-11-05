@@ -33,9 +33,12 @@ def extract_verified(archive, metadata, run_id, expected_exe_sha256, destination
         seen = set()
         files = []
         for entry in entries:
-            path = PurePosixPath(entry.filename)
+            # ZipInfo normalizes backslashes on Windows and truncates at NUL.
+            # Reject altered names using the original header spelling too.
+            original = entry.orig_filename
+            path = PurePosixPath(original)
             key = entry.filename.casefold()
-            if (path.is_absolute() or ".." in path.parts or "\\" in entry.filename
+            if (original != entry.filename or path.is_absolute() or ".." in path.parts or "\\" in entry.filename
                     or ":" in entry.filename or key in seen
                     or stat.S_ISLNK(entry.external_attr >> 16)):
                 raise ValueError("Unexpected archive path: " + entry.filename)
