@@ -43,8 +43,9 @@ The artifact must remain available in GitHub's retention period.
 A no-detection result on a hosted runner cannot reproduce every device's cloud
 verdict or establish safety. If the detection reproduces, retain the exact bytes
 and seek Microsoft's analysis before treating it as an incorrect detection.
-No file has been manually submitted to Microsoft or a public multi-engine service
-as part of this investigation.
+After explicit maintainer authorization, the exact original executable was
+submitted through Microsoft's software-developer analysis portal. It has not
+been submitted to a public multi-engine service.
 
 ## References
 
@@ -69,5 +70,12 @@ script now records these limitations directly in its verdict.
 The evidence artifact from that run is
 [defender-investigation](https://github.com/bradcypert/powerlaunch/actions/runs/42104311359/artifacts/13452190143).
 No EXE/DLL contents were uploaded in the diagnostic artifact. The detected file
-should remain quarantined. Microsoft's analysis of the exact archived executable
-is the next escalation; no manual submission has been authorized or performed.
+should remain quarantined. On 2026-11-05, the maintainer authorized Microsoft
+review and completed the portal's sign-in and verification. Microsoft confirmed
+the original executable as Submitted, with final determination Pending. The
+report includes the Windows 11 detection, exact SHA-256, source/build links and
+limitations of the hosted scan; it does not claim an established false positive.
+
+Account-bound submission links, receipt and contact details are retained locally
+under `build/microsoft-submission/`, rather than published in this repository.
+Await Microsoft's analysis before treating the detection as incorrect.
