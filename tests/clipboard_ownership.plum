@@ -1,0 +1,14 @@
+use clipboard;
+let main (): Unit = {
+    for i in 0..50 {
+        match clipboard.image(()) {
+            Err(e) => { println(e); assert(false) },
+            Ok(png) => {
+                assert(png.len() > 8);
+                assert_eq(Bytes.at(png, 0), Some(137));
+                assert_eq(Bytes.at(png, 1), Some(80));
+            },
+        };
+    };
+    println("Plum clipboard handle/copy-out ownership passed")
+}

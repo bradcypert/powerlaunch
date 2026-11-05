@@ -168,5 +168,6 @@ remain outstanding.
   CI uses actual CF_DIB clipboard data; ordinary local tests inject the getter to
   leave the desktop clipboard alone (opt in with POWERLAUNCH_TEST_SYSTEM_CLIPBOARD=1).
 - The sanitizer workload includes pasted-cover staging/export/commit/cleanup and
-  the native clipboard ownership fixture. Actual Windows desktop/browser clipboard
+  the native clipboard ownership fixture and the actual Plum handle-to-Bytes
+  copy-out path without a graphics driver. Actual Windows desktop/browser clipboard
   checks and broader formats remain useful follow-up coverage.

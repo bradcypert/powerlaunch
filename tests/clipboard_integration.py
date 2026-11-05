@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,5 +26,22 @@ if __name__ == "__main__":
         command += ["-o", str(output)]
         subprocess.run(command, cwd=ROOT, check=True)
         subprocess.run([str(output)], cwd=ROOT, check=True, timeout=30)
+        if sys.platform == "linux" and os.environ.get("POWERLAUNCH_SANITIZE") == "1":
+            # Exercise the actual Plum handle -> borrowed pointer -> Bytes copy,
+            # independent of clipboard/display availability and GPU allocations.
+            sys.path.insert(0, str(ROOT / "scripts"))
+            from build import PLUM, environment
+            project = Path(directory) / "plum-copy"
+            (project / "native").mkdir(parents=True)
+            (project / "clipboard").mkdir()
+            shutil.copy2(ROOT / "app/clipboard/image.plum", project / "clipboard/image.plum")
+            shutil.copy2(ROOT / "app/native/clipboard.c", project / "native/clipboard.c")
+            shutil.copy2(ROOT / "tests/clipboard_image_fixture.c", project / "native/fixture.c")
+            shutil.copy2(ROOT / "tests/clipboard_ownership.plum", project / "main.plum")
+            (project / "plum.pkg").write_text('Package { name: "clipboard-copy-test", native_deps: [] }\n')
+            env, options = environment()
+            helper = project / "check"
+            subprocess.run([PLUM, "build", str(project), "-o", str(helper), *options], cwd=ROOT, env=env, check=True)
+            subprocess.run([str(helper)], cwd=ROOT, env=env, check=True, timeout=30)
     print("Clipboard integration: empty/text clipboard and 50 PNG capture/decode/release cycles passed."
           + (" Read actual Windows CF_DIB data." if system_clipboard else " Getter injected; real X11 paste is covered by UI tests."))
