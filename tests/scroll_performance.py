@@ -41,8 +41,7 @@ if __name__ == '__main__':
     (ROOT/'build').mkdir(exist_ok=True)
     sys.path.insert(0,str(ROOT/'scripts'))
     from build import PLUM, environment
-    # Keep native compiler inputs on the checkout filesystem: MSYS2's virtual
-    # temporary directory is not reliably shared with the Windows Plum binary.
+    # Use checkout-local fixtures and relative compiler paths for MSYS2.
     with tempfile.TemporaryDirectory(prefix='powerlaunch-scroll-', dir=ROOT / 'build') as folder:
         project = Path(folder) / 'project'
         project.mkdir()

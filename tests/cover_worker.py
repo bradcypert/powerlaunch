@@ -11,8 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from build import PLUM, environment
 
-# Keep native compiler inputs on the checkout filesystem: MSYS2's virtual
-# temporary directory is not reliably shared with the Windows Plum binary.
+# Use checkout-local fixtures and relative compiler paths for MSYS2.
 (ROOT / 'build').mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='powerlaunch-worker-', dir=ROOT / 'build') as folder:
     root = Path(folder)
@@ -27,9 +26,12 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-worker-', dir=ROOT / 'build
     (root / 'cover.png').write_bytes(cover(1200, 1800, 1))
     env, options = environment()
     env.update(POWERLAUNCH_MEMORY_REPORT='1', POWERLAUNCH_SCROLL_FIXTURES=folder)
-    output = root / ('worker.exe' if os.name == 'nt' else 'worker')
+    output = ROOT / 'build' / (root.name + ('.exe' if os.name == 'nt' else ''))
     subprocess.run([PLUM, 'build', str(root.relative_to(ROOT)), '-o', str(output.relative_to(ROOT)), *options], env=env, cwd=ROOT, check=True)
-    result = subprocess.run([str(output)], env=env, text=True, capture_output=True, timeout=60)
+    try:
+        result = subprocess.run([str(output)], env=env, text=True, capture_output=True, timeout=60)
+    finally:
+        output.unlink(missing_ok=True)
     print(result.stderr, end='')
     if result.returncode:
         print(result.stdout)
