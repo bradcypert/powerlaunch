@@ -52,3 +52,22 @@ as part of this investigation.
 - [Defender command-line scan semantics](https://learn.microsoft.com/en-us/defender-endpoint/command-line-arguments-microsoft-defender-antivirus)
 - [Protection history status meanings](https://support.microsoft.com/en-us/windows/security/windows-security/protection-history-in-the-windows-security-app)
 - [Microsoft file-analysis submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission)
+
+## Initial controlled-scan result
+
+[Investigation run 42104311359](https://github.com/bradcypert/powerlaunch/actions/runs/42104311359)
+verified the original ZIP digest and executable SHA-256, inventoried the package,
+and scanned it without launching Powerlaunch. Defender reported no threats, exit
+code 0, using engine `1.1.26100.4` and security intelligence `1.463.142.0`.
+
+However, the runner reported cloud/MAPS reporting disabled, real-time protection
+disabled, block-at-first-sight disabled and automatic sample submission disabled.
+This is a **limited custom-scan result**, not an equivalent reproduction of the
+maintainer's desktop protection and not confirmation of a false positive. The
+script now records these limitations directly in its verdict.
+
+The evidence artifact from that run is
+[defender-investigation](https://github.com/bradcypert/powerlaunch/actions/runs/42104311359/artifacts/13452190143).
+No EXE/DLL contents were uploaded in the diagnostic artifact. The detected file
+should remain quarantined. Microsoft's analysis of the exact archived executable
+is the next escalation; no manual submission has been authorized or performed.

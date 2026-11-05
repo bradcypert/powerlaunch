@@ -64,6 +64,14 @@ try {
     $report.scanner = $scanner
     $report.engine = $status.AMEngineVersion
     $report.signatures = $status.AntivirusSignatureVersion
+    $limitations = @()
+    if (!$status.RealTimeProtectionEnabled) { $limitations += 'real_time_protection_disabled' }
+    if ([int]$preference.MAPSReporting -eq 0) { $limitations += 'cloud_reporting_disabled' }
+    if ($preference.DisableBlockAtFirstSeen) { $limitations += 'block_at_first_sight_disabled' }
+    if ([int]$preference.SubmitSamplesConsent -eq 2) { $limitations += 'automatic_sample_submission_disabled' }
+    $report.limitations = $limitations
+    $report.real_time_enabled = [bool]$status.RealTimeProtectionEnabled
+    $report.cloud_reporting = [int]$preference.MAPSReporting
     $report.scan_started_utc = [DateTime]::UtcNow.ToString('o')
     # Custom scan only: preserve evidence; no exclusions, allow rules or restores.
     # With remediation disabled, detections are in console output, not necessarily
@@ -79,7 +87,10 @@ try {
         $report.verdict = 'detection_or_scan_error'
         throw "Defender returned $scanCode; review scan-output.txt before interpreting the result."
     }
-    $report.verdict = 'no_detection_in_this_scan'
+    $report.verdict = if ($limitations.Count) { 'no_detection_limited_scan' } else { 'no_detection_in_this_scan' }
+    if ($limitations.Count) {
+        Write-Warning ('No detection in a limited custom scan. This is not equivalent to the reported desktop verdict: ' + ($limitations -join ', '))
+    }
 } catch {
     $report.error = $_.Exception.Message
     throw
