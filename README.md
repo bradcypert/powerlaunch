@@ -183,5 +183,6 @@ memory while the backend decodes them.
 Cover loading uses one Plum background worker and disposable thumbnails in
 `thumbnails-v1/` beside `library.json`. It is safe to delete that cache while the
 launcher is closed; originals remain in `artwork/`. It regenerates as needed and
-currently has no automatic disk pruning. GPU texture storage is bounded at
+currently has no automatic disk pruning. Cover decoding accepts images up to
+16 megapixels; larger images should be resized before importing. GPU texture storage is bounded at
 128 textures / 64 MiB of tracked pixels; this is not a total process-memory limit.
