@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-worker-', dir=ROOT / 'build
     (root / 'cover.png').write_bytes(cover(1200, 1800, 1))
     env, options = environment()
     env.update(POWERLAUNCH_MEMORY_REPORT='1', POWERLAUNCH_SCROLL_FIXTURES=folder)
-    output = ROOT / 'build' / (root.name + ('.exe' if os.name == 'nt' else ''))
+    output = ROOT / 'build' / (root.name + '-check' + ('.exe' if os.name == 'nt' else ''))
     subprocess.run([PLUM, 'build', str(root.relative_to(ROOT)), '-o', str(output.relative_to(ROOT)), *options], env=env, cwd=ROOT, check=True)
     try:
         result = subprocess.run([str(output)], env=env, text=True, capture_output=True, timeout=60)
