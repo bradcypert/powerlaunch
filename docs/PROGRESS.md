@@ -86,7 +86,7 @@ remain outstanding.
 - The graphics-free 250-cycle/100-game ASan/LSan workload passed locally without
   invalid-access or leak findings. Short working-set tests and the bounded cache
   test are recorded in `MEMORY.md`; none establishes universal leak freedom.
-- Upstream opportunities are in `PLUM-CANDIDATES.md`. No issues have been filed.
+- Upstream opportunities and issue links are tracked in `PLUM-CANDIDATES.md`.
 - [Design-pass CI](https://github.com/bradcypert/powerlaunch/actions/runs/41904981216)
   passed both the Windows packaging/window/memory job and the Linux sanitizer
   job. The linked Windows executable's icon resources were verified. The Windows
@@ -116,3 +116,26 @@ remain outstanding.
 - Pin raylib for release builds and test native dependency bundling/licensing.
 - Propose reusable cwd/detached-process functionality upstream in Plum after
   validating API and ownership semantics independently of this application.
+
+## Workflow, storage, and widget refactor
+
+- `workflow` owns typed screens and navigation destinations, dirty-draft decisions,
+  save/discard/cancel transitions, and successful-save continuation. Confirmation
+  carries its destination rather than combining independent integer mode flags.
+- `storage` owns opening/recovery state, metadata commits, managed-cover import
+  rollback, removal, and managed artwork paths. Failed commits return errors
+  without replacing the caller's in-memory library. Recovery stores reject writes.
+  The versioned JSON format and retention of existing/shared covers are unchanged.
+- `desktop` owns named typography/button roles and common interaction behavior.
+  Enabled buttons/cards request a pointer, editable fields request an I-beam, and
+  noninteractive or disabled regions restore the arrow. Font resources and matching
+  draw/measure behavior live in a separate native typography adapter.
+- Keyboard opening consumes that activation before rendering details, replacing
+  the special negative focus ID that previously prevented accidental Play.
+- Twelve Plum tests and native process integration pass. The expanded real-input
+  UI test checks displayed cursor images, modal background controls, failed-save
+  draft retention, Enter/Play separation, and existing registration/edit/reload.
+- The expanded 250-cycle sanitizer workload exercises pure navigation and managed
+  artwork commits/reloads as well as filtering and JSON; no ASan/LSan findings.
+- Small-text rasterization intentionally remains unchanged during this refactor.
+  Windows native-size/DPI comparisons and icon redesign remain follow-up work.

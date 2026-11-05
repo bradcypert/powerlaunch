@@ -87,3 +87,20 @@ Use longer repetitions if a trend grows, then separate model-only and GUI/native
 workloads. Minimize a reproducible ownership failure before attributing it to
 Plum or filing an issue. Current upstream discussion notes live in
 `PLUM-CANDIDATES.md`; the measurements so far have not established a Plum leak.
+
+## Refactor validation (2026-11-04)
+
+The workflow/storage/widget refactor passed the expanded graphics-free 250-cycle
+ASan/LSan workload: 100 games, dirty-navigation confirmations, managed-cover
+commits/reloads, and edit/filter/sort/JSON operations. It recorded 13,302,842
+cumulative allocations / 580,163,607 cumulative bytes; these are not live totals.
+This workload adds navigation and storage work, so its allocation totals are not
+an identical-workload comparison with the earlier model-only run.
+
+A ten-second Linux llvmpipe profile with 2,000 games and 40 available covers peaked
+at 120,467,456 bytes RSS (114.9 MiB). After warmup, RSS and anonymous RSS each grew
+by zero; resident-private pages grew by 3,125,248 bytes. The cache reached ten
+textures / 6,144,000 tracked texture bytes and released all textures on close.
+As before, private-page changes alone do not establish a heap leak. Diagnostics
+are retained locally in `build/memory-profile.json` and `memory-sanitizer.log`;
+Windows CI provides the platform-specific follow-up measurement.

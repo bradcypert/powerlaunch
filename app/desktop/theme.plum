@@ -1,0 +1,18 @@
+// Product typography and widget semantics live in Plum; C owns font resources.
+pub enum TextStyle { Caption, FieldLabel, HintText, SecondaryText, BodyText, SectionTitle, BrandText, CoverTitle, DialogTitle, EmptyTitle, EditorTitle, PageTitle }
+pub enum ButtonStyle { StandardButton, PrimaryButton, QuietButton, NavigationButton, DangerButton }
+
+pub let font_size (style: TextStyle): Int = match style {
+    Caption => 13, FieldLabel => 14, HintText => 15, SecondaryText => 16,
+    BodyText => 17, SectionTitle => 18, BrandText => 19, CoverTitle => 20, DialogTitle => 27,
+    EmptyTitle => 28, EditorTitle => 30, PageTitle => 32,
+}
+
+pub let canvas (): Int = 1514019
+pub let rail (): Int = 1843243
+pub let surface (): Int = 2370104
+pub let ink (): Int = 15593719
+pub let muted (): Int = 10858435
+pub let accent (): Int = 12167154
+pub let warning (): Int = 15179927
+

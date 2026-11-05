@@ -1,8 +1,22 @@
 # Plum upstream candidates
 
-These are discussion notes, not filed issues or changes to Plum. Library-specific
-rendering and Powerlaunch workflows remain in this project. Keep minimal repros
-and measurements separate from assumptions about language guarantees.
+The following issues were filed after the workflow/storage/widget refactor and
+local validation. No Plum implementation changes were made. Library-specific
+rendering and Powerlaunch workflows remain here; measurements are not proof of
+language-wide guarantees.
+
+| Item | Upstream issue |
+| --- | --- |
+| Detached processes and per-child cwd | [#435](https://github.com/bradcypert/plum/issues/435) |
+| Prebuilt objects and compiler-driver arguments | [#436](https://github.com/bradcypert/plum/issues/436) |
+| Live/peak allocation diagnostics and sanitizer workflow | [#437](https://github.com/bradcypert/plum/issues/437) |
+| C scalar/layout coverage or generated bindings | [#438](https://github.com/bradcypert/plum/issues/438) |
+| Bounded mutable native buffers and ownership contract | [#439](https://github.com/bradcypert/plum/issues/439) |
+| Module aliases in qualified type annotations (new reproduction) | [#440](https://github.com/bradcypert/plum/issues/440) |
+
+Issues include pinned source links, concrete application workarounds, design
+tradeoffs, and acceptance tests. Existing ownership/counter/process discussions
+are cross-linked rather than presented as new discoveries.
 
 ## Detached processes and child-specific working directories
 
@@ -19,7 +33,8 @@ Windows `.lnk` integration may belong in a desktop package rather than Process.
 ## C ABI scalar and struct coverage / bindings tooling
 
 Evidence: `app/native/ui.c` adapts raylib's `float`, byte colors, rectangles and
-handles to Plum's currently closed `Int`/`Float`/`Bool`/`CStr` extern surface.
+handles to Plum's closed extern scalar surface. Struct FFI already exists for
+supported field types; C float/byte-sized fields are the relevant layout gap.
 That adapter would be needed by other Plum applications using the same C APIs.
 
 Proposed discussion: typed fixed-width C scalars/POD layout, or generated wrappers
@@ -45,8 +60,10 @@ Evidence: the raygui text API expects a mutable C buffer. The binding keeps one
 16 KiB scratch buffer and immediately copies results back to Plum; application
 records stay in Plum. Textures have a bounded native LRU and explicit cleanup.
 
-Proposed discussion: an owned native-buffer abstraction and documented callback/
-borrowed-string lifetimes could reduce repeated binding scaffolding. Native
+Plum already supports `Bytes.as_cstr`, `Bytes.from_cstr`, and opaque handles.
+The request concerns bounded mutable native storage and its aliasing/borrow
+contract, rather than re-adding binary FFI. An owned native-buffer abstraction
+and documented callback/borrowed-string lifetimes could reduce scaffolding. Native
 resource wrappers should have deterministic release and must not hide raw handle
 aliasing. This is a reusable FFI concern, not a reason to move editor state to C.
 
@@ -60,3 +77,11 @@ a relative path because `PLUM_CC` is split on spaces rather than shell-quoted.
 Proposed discussion: a portable `--link-object` option and/or manifest resource
 inputs, with structured compiler arguments. This would support Windows resource
 objects and other language-neutral native assets without driver-prefix workarounds.
+
+## Module alias type reproduction
+
+Plum 0.0.41 accepts `geo.point()` after `use shapes as geo`, but rejects an
+annotation `geo.Point` with `unknown type: geo.Point`. Changing just the
+annotation to `shapes.Point` passes. Issue #440 contains the complete two-file
+fixture and references the types requirement in the earlier alias issue #44.
+Powerlaunch uses canonical module names for types while keeping function aliases.

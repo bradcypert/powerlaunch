@@ -118,3 +118,26 @@ class Driver:
         event_key(0xFFE3, 1)
         key(symbol)
         event_key(0xFFE3, 0)
+
+
+class CursorImage(C.Structure):
+    _fields_ = [("x", C.c_short), ("y", C.c_short),
+        ("width", C.c_ushort), ("height", C.c_ushort),
+        ("xhot", C.c_ushort), ("yhot", C.c_ushort),
+        ("serial", U), ("pixels", C.POINTER(U))]
+
+fixes = C.CDLL("libXfixes.so.3")
+fixes.XFixesGetCursorImage.argtypes = [D]
+fixes.XFixesGetCursorImage.restype = C.POINTER(CursorImage)
+
+
+def cursor_image():
+    """Compare the actual displayed cursor, independent of theme and serial IDs."""
+    pointer = fixes.XFixesGetCursorImage(display)
+    assert pointer, "XFixes did not return the displayed cursor"
+    try:
+        c = pointer.contents
+        return (c.width, c.height, c.xhot, c.yhot,
+                tuple(c.pixels[i] for i in range(c.width * c.height)))
+    finally:
+        x.XFree(C.cast(pointer, D))

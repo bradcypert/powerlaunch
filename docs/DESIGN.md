@@ -10,7 +10,8 @@ behavior; the title bar adopts the application's dark colors.
 - Text: paper `#EDF0F7`; secondary slate `#A5AFC3`.
 - Accent: soft iris `#B9A7F2`; actions use dark text on iris.
 - Type: Segoe UI on Windows, Open Sans on Linux, system Arial on macOS.
-  Sizes: 32 for page/game titles, 20 for sections, 17 for body, 14 for metadata.
+  Named roles and sizes live in `app/desktop/theme.plum`; drawing and wrapping
+  share the same policy. Native font selection/lifetime live in `typography.c`.
 - Geometry: 8 px spacing grid, restrained 5 px button corners, portrait 2:3 covers.
   Borders indicate focus/selection rather than enclosing every label.
 - Identity: a simple P/play monogram, built as SVG and embedded into the executable
@@ -61,3 +62,21 @@ ownership issues from native adapters and driver allocations.
 Generally useful C-heavy work is documented as an upstream candidate in
 `PLUM-CANDIDATES.md`. Do not modify Plum or file issues without coordinating with
 the maintainer; report concrete evidence and proposed reusable API boundaries.
+
+## Application modules
+
+`main` adapts window input and renders the active screen. `workflow` makes pure
+navigation and draft decisions; it does not launch processes or access files.
+`storage` commits metadata and managed artwork and returns a result before the UI
+adopts a new library. `platform` handles process/dialog/filesystem adaptation.
+
+A `ConfirmScreen(destination)` carries its own continuation and renders the
+editor beneath it. Save errors retain that screen and draft; only a successful
+store result passes through `saved_and_continue`. Button styles and text roles
+are enums, while dynamic field IDs remain local to the renderer. Keyboard events
+that open details are consumed before focused controls can process them again.
+
+The widget adapter selects a cursor only for enabled, unclipped hit regions;
+it applies a change at frame end only when the requested cursor changes. This
+provides hover affordances, not screen-reader support. Font rasterization is
+preserved for now so typography quality can be investigated independently.

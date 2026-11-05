@@ -3,126 +3,42 @@ use platform;
 use desktop as ui;
 use Os;
 use diagnostics;
+use workflow as flow;
+use storage;
 
-// Views: 0 library, 1 game details, 2 editor. Pending: 1 close, 2 library,
-// 3 new game, 4 cancel editor. All workflow and layout decisions stay in Plum.
-struct State {
-    lib: library.Library,
-    visible: Array[library.Game],
-    tags: Array[String],
-    draft: library.Game,
-    original: library.Game,
-    root: String,
-    query: String,
-    tag: String,
-    sort: Int,
-    dropdown: Int,
-    menu_scroll: Int,
-    favorites: Bool,
-    view: Int,
-    focus: Int,
-    selected: Int,
-    scroll: Int,
-    editor_scroll: Int,
-    artwork_source: String,
-    tags_text: String,
-    status: String,
-    blocked: Bool,
-    removing: Bool,
-    missing: Bool,
-    pending: Int,
-    quit: Bool,
-}
+let message (s: workflow.State) (text: String): workflow.State = workflow.State { status: text, ..s }
 
-let dirty (s: State): Bool = s.view == 2 && (s.draft != s.original || s.artwork_source != ""
-    || s.tags_text != Array.join(s.original.tags, ", "))
+let open_game (s: workflow.State) (game: library.Game): workflow.State =
+    flow.open_game(s, game, !Os.exists(game.target).unwrap_or(false))
 
-let message (s: State) (text: String): State = State { status: text, ..s }
-
-let refresh (s: State): State = {
-    let tags = library.all_tags(s.lib);
-    let tag = if s.tag != "" && !Array.contains(tags, s.tag) { "" } else { s.tag };
-    State { visible: library.browse(s.lib, s.query, s.favorites, tag, s.sort),
-        tag: tag, tags: tags, selected: 0, scroll: 0, ..s }
-}
-
-let open_game (s: State) (game: library.Game): State = State {
-    draft: game, original: game, artwork_source: "", focus: 201, view: 1,
-    tags_text: Array.join(game.tags, ", "), status: "", removing: false,
-    missing: !Os.exists(game.target).unwrap_or(false), editor_scroll: 0, dropdown: 0, ..s }
-
-let new_game (s: State): State = State {
-    draft: library.draft(()), original: library.draft(()), artwork_source: "",
-    tags_text: "", dropdown: 0, view: 2, focus: 1, editor_scroll: 0, status: "", removing: false, ..s }
-
-let finish_pending (s: State): State = {
-    let pending = s.pending;
-    let clean = State { pending: 0, dropdown: 0, menu_scroll: 0, draft: s.original, artwork_source: "",
-        tags_text: Array.join(s.original.tags, ", "), status: "", ..s };
-    if pending == 1 { State { quit: true, ..clean } }
-    else if pending == 3 { new_game(clean) }
-    else if pending == 4 { State { view: if clean.draft.id == "" { 0 } else { 1 }, focus: 200, ..clean } }
-    else { State { view: 0, focus: 300, ..clean } }
-}
-
-let request (s: State) (pending: Int): State =
-    if dirty(s) { State { pending: pending, focus: 902, ..s } }
-    else { finish_pending(State { pending: pending, ..s }) }
-
-let select_target (s: State): State = {
+let select_target (s: workflow.State): workflow.State = {
     let path = platform.pick_file(false);
     if path == "" { s } else {
         let shortcut = path.to_lower().ends_with(".lnk");
-        State { draft: library.Game {
+        workflow.State { draft: library.Game {
             title: if s.draft.title == "" { platform.suggested_title(path) } else { s.draft.title },
             target: path, working_directory: if shortcut { "" } else { platform.parent(path) }, ..s.draft },
             status: "", ..s }
     }
 }
 
-let choose_artwork (s: State): State = {
+let choose_artwork (s: workflow.State): workflow.State = {
     let path = platform.pick_file(true);
     if path == "" { s }
     else if !ui.image_valid(path) { message(s, "This image could not be opened. Choose another cover.") }
-    else { State { artwork_source: path, status: "Cover ready. Save changes to keep it.", ..s } }
+    else { workflow.State { artwork_source: path, status: "Cover ready. Save changes to keep it.", ..s } }
 }
 
-let save_library (s: State) (updated: library.Library) (game: library.Game): State =
-    match library.save(s.root.concat("/library.json"), updated) {
-        Err(e) => message(s, "Could not save: ".concat(e)),
-        Ok(ignored) => refresh(State { lib: updated, draft: game, original: game,
-            view: 1, focus: 201, artwork_source: "", tags_text: Array.join(game.tags, ", "),
-            status: "Changes saved.", removing: false, missing: !Os.exists(game.target).unwrap_or(false), ..s }),
-    }
+let persist (s: workflow.State): Result[workflow.State, String] =
+    Result.map(storage.save_game(s.store, s.lib, s.draft, s.artwork_source), |saved|
+        flow.saved(s, saved.lib, saved.game, !Os.exists(saved.game.target).unwrap_or(false)))
 
-let save_game (s: State): State =
-    if s.blocked { message(s, "Library recovery is required before changes can be saved.") }
-    else { match library.upsert(s.lib, s.draft) {
-        Err(e) => message(s, e),
-        Ok(updated) => {
-            let game = if s.draft.id == "" { updated.games[updated.games.len() - 1] }
-                else { Array.find(updated.games, |g| g.id == s.draft.id).unwrap_or(s.draft) };
-            if s.artwork_source == "" { save_library(s, updated, game) }
-            else { match platform.import_artwork(s.root, s.artwork_source) {
-                Err(e) => message(s, "Could not copy cover: ".concat(e)),
-                Ok(name) => {
-                    let covered = library.Game { cover: name, ..game };
-                    match library.upsert(updated, covered) {
-                        Err(e) => message(s, e),
-                        Ok(with_artwork) => {
-                            let result = save_library(s, with_artwork, covered);
-                            if result.view == 2 {
-                                let cleanup = Os.remove_file(s.root.concat("/artwork/").concat(name));
-                                result
-                            } else { result }
-                        },
-                    }
-                },
-            } }
-        },
-    } }
+let save_game (s: workflow.State): workflow.State = match persist(s) {
+    Err(e) => message(s, e),
+    Ok(saved) => saved,
+}
 
-let play (s: State): State =
+let play (s: workflow.State): workflow.State =
     match library.validate(s.draft) {
         Err(e) => message(s, e),
         Ok(game) => match platform.launch(game.target, game.arguments, game.working_directory) {
@@ -131,50 +47,47 @@ let play (s: State): State =
         },
     }
 
-let remove_game (s: State): State =
-    if s.blocked { s }
-    else { match library.save(s.root.concat("/library.json"), library.remove(s.lib, s.draft.id)) {
-        Err(e) => message(s, "Could not remove entry: ".concat(e)),
-        Ok(ignored) => refresh(State { lib: library.remove(s.lib, s.draft.id),
-            draft: library.draft(()), original: library.draft(()), view: 0,
-            removing: false, artwork_source: "", tags_text: "", status: "Removed from library. Game files were kept.", ..s }),
-    } }
+let remove_game (s: workflow.State): workflow.State = match storage.remove_game(s.store, s.lib, s.draft.id) {
+    Err(e) => message(s, e),
+    Ok(updated) => flow.refresh(workflow.State { lib: updated, draft: library.draft(()),
+        original: library.draft(()), screen: LibraryScreen, removing: false, artwork_source: "",
+        tags_text: "", status: "Removed from library. Game files were kept.", ..s }),
+}
 
-let action (s: State) (id: Int) (label: String) (x: Int) (y: Int) (w: Int) (h: Int) (kind: Int) (selected: Bool): Bool =
+let action (s: workflow.State) (id: Int) (label: String) (x: Int) (y: Int) (w: Int) (h: Int) (kind: desktop.ButtonStyle) (selected: Bool): Bool =
     ui.action(label, x, y, w, h, kind, selected, s.focus == id)
 
-let draw_navigation (s: State): State = {
+let draw_navigation (s: workflow.State): workflow.State = {
     ui.rect(0, 0, 188, ui.height(()), ui.rail(()));
     ui.logo(22, 26, 36);
-    ui.text("Powerlaunch", 70, 34, 19, ui.ink(()));
-    ui.text("Library", 24, 102, 14, ui.muted(()));
-    let all = action(s, 100, "All games", 16, 132, 156, 44, 3, !s.favorites && s.view == 0);
-    let favorites = action(s, 101, "Favorites", 16, 184, 156, 44, 3, s.favorites && s.view == 0);
-    let add = action(s, 102, "+ Add game", 16, 264, 156, 44, 0, false);
-    ui.text(s.lib.games.len().to_string().concat(" games"), 26, ui.height(()) - 78, 15, ui.muted(()));
-    ui.text("On your computer", 26, ui.height(()) - 50, 13, ui.muted(()));
-    if add { request(s, 3) }
+    ui.text("Powerlaunch", 70, 34, BrandText, ui.ink(()));
+    ui.text("Library", 24, 102, FieldLabel, ui.muted(()));
+    let all = action(s, 100, "All games", 16, 132, 156, 44, NavigationButton, !s.favorites && s.screen == LibraryScreen);
+    let favorites = action(s, 101, "Favorites", 16, 184, 156, 44, NavigationButton, s.favorites && s.screen == LibraryScreen);
+    let add = action(s, 102, "+ Add game", 16, 264, 156, 44, StandardButton, false);
+    ui.text(s.lib.games.len().to_string().concat(" games"), 26, ui.height(()) - 78, HintText, ui.muted(()));
+    ui.text("On your computer", 26, ui.height(()) - 50, Caption, ui.muted(()));
+    if add { flow.request(s, AddGame) }
     else if all || favorites {
-        request(refresh(State { favorites: favorites, ..s }), 2)
+        flow.request(flow.refresh(workflow.State { favorites: favorites, ..s }), ShowLibrary)
     } else { s }
 }
 
-let cover_path (s: State): String =
+let cover_path (s: workflow.State): String =
     if s.artwork_source != "" { s.artwork_source }
-    else if s.draft.cover != "" { s.root.concat("/artwork/").concat(s.draft.cover) }
-    else { "" }
+    else { storage.cover_path(s.store, s.draft.cover) }
 
 let draw_cover (path: String) (title: String) (x: Int) (y: Int) (w: Int) (h: Int): Unit = {
     ui.round_rect(x, y, w, h, ui.surface(()));
     if path == "" {
         ui.logo(x + (w - 54) / 2, y + h / 3 - 20, 54);
         ui.clip(x + 16, y + h / 2, w - 32, h / 2 - 12);
-        let lines = ui.paragraph(title, x + 16, y + h / 2, w - 32, 20, ui.ink(()));
+        let lines = ui.paragraph(title, x + 16, y + h / 2, w - 32, CoverTitle, ui.ink(()));
         ui.unclip(())
     } else {
         let loaded = ui.cover(path, x, y, w, h);
         if !loaded {
-            ui.text("Cover unavailable", x + 12, y + h / 2, 15, ui.warning(()))
+            ui.text("Cover unavailable", x + 12, y + h / 2, HintText, ui.warning(()))
         }
     }
 }
@@ -183,11 +96,11 @@ let columns (): Int = Int.max(1, (ui.width(()) - 252) / 190)
 let card_width (): Int = ((ui.width(()) - 252) - (columns(()) - 1) * 24) / columns(())
 let row_height (): Int = card_width(()) * 3 / 2 + 72
 
-let menu_items (s: State): Array[String] =
+let menu_items (s: workflow.State): Array[String] =
     if s.dropdown == 1 { Array.concat(["All tags"], s.tags) }
     else { ["Title: A to Z", "Title: Z to A", "Release year"] }
 
-let draw_dropdown (s: State) (opened: Bool): State = {
+let draw_dropdown (s: workflow.State) (opened: Bool): workflow.State = {
     let items = menu_items(s);
     let x = if s.dropdown == 1 { 220 } else { ui.width(()) - 264 };
     let count = Int.min(8, items.len());
@@ -200,61 +113,61 @@ let draw_dropdown (s: State) (opened: Bool): State = {
     let choice = -1;
     for i in scroll..Int.min(items.len(), scroll + count) {
         let selected = if s.dropdown == 1 { (i == 0 && s.tag == "") || (i > 0 && s.tag == items[i]) } else { s.sort == i };
-        if action(s, 700 + i, items[i], x + 6, 156 + (i - scroll) * 36, 220, 34, 3, selected) { choice = i; };
+        if action(s, 700 + i, items[i], x + 6, 156 + (i - scroll) * 36, 220, 34, NavigationButton, selected) { choice = i; };
     };
     if choice >= 0 {
-        refresh(State { tag: if s.dropdown == 1 { if choice == 0 { "" } else { items[choice] } } else { s.tag },
+        flow.refresh(workflow.State { tag: if s.dropdown == 1 { if choice == 0 { "" } else { items[choice] } } else { s.tag },
             sort: if s.dropdown == 2 { choice } else { s.sort }, dropdown: 0, menu_scroll: 0,
             focus: if s.dropdown == 1 { 110 } else { 111 }, ..s })
-    } else if !opened && ui.released(()) && !ui.hover(x, 148, 232, height) { State { dropdown: 0, ..s } }
-    else { State { menu_scroll: scroll, ..s } }
+    } else if !opened && ui.released(()) && !ui.hover(x, 148, 232, height) { workflow.State { dropdown: 0, ..s } }
+    else { workflow.State { menu_scroll: scroll, ..s } }
 }
 
-let draw_grid (s: State): State = {
+let draw_grid (s: workflow.State): workflow.State = {
     let width = ui.width(()) - 252;
-    ui.text(if s.favorites { "Favorites" } else { "Your library" }, 220, 34, 32, ui.ink(()));
+    ui.text(if s.favorites { "Favorites" } else { "Your library" }, 220, 34, PageTitle, ui.ink(()));
     let query_width = Int.min(300, width / 3);
     let query_x = ui.width(()) - query_width - 32;
     let query = ui.field(0, s.query, query_x, 36, query_width, 38, s.focus == 0);
-    if query == "" && s.focus != 0 { ui.text("Search games or tags", query_x + 12, 46, 15, ui.muted(())) };
+    if query == "" && s.focus != 0 { ui.text("Search games or tags", query_x + 12, 46, HintText, ui.muted(())) };
     let focus = if ui.clicked(query_x, 36, query_width, 38) { 0 } else { s.focus };
-    let tag_click = action(s, 110, (if s.tag == "" { "All tags" } else { s.tag }).concat("  v"), 220, 104, 190, 34, 0, s.tag != "");
+    let tag_click = action(s, 110, (if s.tag == "" { "All tags" } else { s.tag }).concat("  v"), 220, 104, 190, 34, StandardButton, s.tag != "");
     let sort_click = action(s, 111, (if s.sort == 1 { "Title: Z to A" } else if s.sort == 2 { "Release year" } else { "Title: A to Z" }).concat("  v"),
-        ui.width(()) - 222, 104, 190, 34, 0, false);
+        ui.width(()) - 222, 104, 190, 34, StandardButton, false);
     let menu = if tag_click { if s.dropdown == 1 { 0 } else { 1 } }
         else if sort_click { if s.dropdown == 2 { 0 } else { 2 } } else { s.dropdown };
-    let base = State { dropdown: menu, menu_scroll: if tag_click || sort_click { 0 } else { s.menu_scroll },
+    let base = workflow.State { dropdown: menu, menu_scroll: if tag_click || sort_click { 0 } else { s.menu_scroll },
         focus: if menu != 0 && (tag_click || sort_click) { 700 } else { focus }, ..s };
-    let next = if query != s.query { refresh(State { query: query, ..base }) } else { base };
+    let next = if query != s.query { flow.refresh(workflow.State { query: query, ..base }) } else { base };
     if menu != 0 { ui.enable(false) };
     let rows = (next.visible.len() + columns(()) - 1) / columns(());
     let scroll = if ui.hover(204, 154, width + 30, ui.height(()) - 210) {
         Int.max(0, Int.min(Int.max(0, rows * row_height(()) - (ui.height(()) - 218)), next.scroll - ui.wheel(())))
     } else { next.scroll };
-    let acc = State { scroll: scroll, ..next };
+    let acc = workflow.State { scroll: scroll, ..next };
     ui.clip(212, 156, width + 16, ui.height(()) - 216);
     if next.visible.len() == 0 {
         ui.logo(220, 220, 72);
-        ui.text(if s.lib.games.len() == 0 { "Your library starts here." } else { "No matching games." }, 220, 320, 28, ui.ink(()));
+        ui.text(if s.lib.games.len() == 0 { "Your library starts here." } else { "No matching games." }, 220, 320, EmptyTitle, ui.ink(()));
         ui.text(if s.lib.games.len() == 0 { "Add a game from your computer and make it yours." } else { "Try another title or clear the tag filter." },
-            220, 365, 17, ui.muted(()));
-        if action(next, 102, "+ Add your first game", 220, 414, 218, 44, 1, false) { acc = request(acc, 3); }
+            220, 365, BodyText, ui.muted(()));
+        if action(next, 102, "+ Add your first game", 220, 414, 218, 44, PrimaryButton, false) { acc = flow.request(acc, AddGame); }
     };
     for i in 0..next.visible.len() {
         let y = 164 + (i / columns(())) * row_height(()) - scroll;
         if y + row_height(()) > 156 && y < ui.height(()) - 60 {
             let x = 220 + (i % columns(())) * (card_width(()) + 24);
             let game = next.visible[i];
-            let path = if game.cover == "" { "" } else { s.root.concat("/artwork/").concat(game.cover) };
+            let path = storage.cover_path(s.store, game.cover);
             draw_cover(path, game.title, x, y, card_width(()), card_width(()) * 3 / 2);
             if ui.hover(x, y, card_width(()), card_width(()) * 3 / 2) || (s.focus == 300 && s.selected == i) {
                 ui.outline(x - 3, y - 3, card_width(()) + 6, card_width(()) * 3 / 2 + 6, ui.accent(()))
             };
             ui.clip(x, y + card_width(()) * 3 / 2 + 12, card_width(()), 48);
-            ui.text(game.title, x, y + card_width(()) * 3 / 2 + 12, 17, ui.ink(()));
-            ui.text(if game.favorite { "Favorite" } else { game.developer }, x, y + card_width(()) * 3 / 2 + 38, 13, ui.muted(()));
+            ui.text(game.title, x, y + card_width(()) * 3 / 2 + 12, BodyText, ui.ink(()));
+            ui.text(if game.favorite { "Favorite" } else { game.developer }, x, y + card_width(()) * 3 / 2 + 38, Caption, ui.muted(()));
             ui.unclip(());
-            if ui.hover(x, y, card_width(()), row_height(()) - 14) && ui.released(()) {
+            if ui.interactive(x, y, card_width(()), row_height(()) - 14) && ui.released(()) {
                 acc = open_game(acc, game);
             };
         };
@@ -264,53 +177,53 @@ let draw_grid (s: State): State = {
     if acc.dropdown != 0 { draw_dropdown(acc, tag_click || sort_click) } else { acc }
 }
 
-let draw_detail (s: State): State = {
-    let back = action(s, 200, "< Library", 220, 28, 120, 36, 2, false);
+let draw_detail (s: workflow.State): workflow.State = {
+    let back = action(s, 200, "< Library", 220, 28, 120, 36, QuietButton, false);
     let x = 500;
     draw_cover(cover_path(s), s.draft.title, 220, 100, 240, 360);
     ui.clip(x, 100, ui.width(()) - x - 36, 90);
-    let height = ui.paragraph(s.draft.title, x, 102, ui.width(()) - x - 36, 32, ui.ink(()));
+    let height = ui.paragraph(s.draft.title, x, 102, ui.width(()) - x - 36, PageTitle, ui.ink(()));
     ui.unclip(());
-    ui.text(s.draft.developer.concat(if s.draft.release_year == "" { "" } else { " / ".concat(s.draft.release_year) }), x, 196, 16, ui.muted(()));
-    let launch = action(s, 201, "Play", x, 240, 132, 46, 1, false);
-    let edit = action(s, 202, "Edit game", x + 148, 240, 132, 46, 0, false);
-    let favorite = action(s, 203, if s.draft.favorite { "Favorited" } else { "Favorite" }, x, 302, 132, 36, 0, s.draft.favorite);
-    let repair = if s.missing { action(s, 204, "Locate game", x + 148, 302, 132, 36, 0, false) } else { false };
-    let remove = action(s, 205, if s.removing { "Confirm removal" } else { "Remove entry" }, 220, 484, 240, 36, 4, false);
+    ui.text(s.draft.developer.concat(if s.draft.release_year == "" { "" } else { " / ".concat(s.draft.release_year) }), x, 196, SecondaryText, ui.muted(()));
+    let launch = action(s, 201, "Play", x, 240, 132, 46, PrimaryButton, false);
+    let edit = action(s, 202, "Edit game", x + 148, 240, 132, 46, StandardButton, false);
+    let favorite = action(s, 203, if s.draft.favorite { "Favorited" } else { "Favorite" }, x, 302, 132, 36, StandardButton, s.draft.favorite);
+    let repair = if s.missing { action(s, 204, "Locate game", x + 148, 302, 132, 36, StandardButton, false) } else { false };
+    let remove = action(s, 205, if s.removing { "Confirm removal" } else { "Remove entry" }, 220, 484, 240, 36, DangerButton, false);
     ui.clip(x, 366, ui.width(()) - x - 36, ui.height(()) - 436);
     let desc_height = ui.paragraph(if s.draft.description == "" { "No description yet. Add one in Edit game." } else { s.draft.description },
-        x, 366, ui.width(()) - x - 36, 17, if s.draft.description == "" { ui.muted(()) } else { ui.ink(()) });
-    ui.text(Array.join(s.draft.tags, " / "), x, 390 + desc_height, 14, ui.accent(()));
+        x, 366, ui.width(()) - x - 36, BodyText, if s.draft.description == "" { ui.muted(()) } else { ui.ink(()) });
+    ui.text(Array.join(s.draft.tags, " / "), x, 390 + desc_height, FieldLabel, ui.accent(()));
     if s.missing { let h = ui.paragraph("The game has moved or is unavailable. Choose Locate game to repair its launch path.", x, 436 + desc_height,
-        ui.width(()) - x - 36, 16, ui.warning(())); };
+        ui.width(()) - x - 36, SecondaryText, ui.warning(())); };
     ui.unclip(());
-    if back { request(s, 2) }
-    else if edit { State { view: 2, focus: 1, editor_scroll: 0, ..s } }
+    if back { flow.request(s, ShowLibrary) }
+    else if edit { workflow.State { screen: EditorScreen, focus: 1, editor_scroll: 0, ..s } }
     else if launch { play(s) }
     else if repair {
-        let changed = select_target(State { view: 2, ..s });
+        let changed = select_target(workflow.State { screen: EditorScreen, ..s });
         if changed.draft == s.draft { s } else { save_game(changed) }
-    } else if favorite { save_game(State { draft: library.Game { favorite: !s.draft.favorite, ..s.draft }, ..s }) }
+    } else if favorite { save_game(workflow.State { draft: library.Game { favorite: !s.draft.favorite, ..s.draft }, ..s }) }
     else if remove {
         if s.removing { remove_game(s) }
-        else { State { removing: true, status: "Remove only this library entry? Click Confirm removal. Game files will be kept.", ..s } }
+        else { workflow.State { removing: true, status: "Remove only this library entry? Click Confirm removal. Game files will be kept.", ..s } }
     } else { s }
 }
 
 struct Field { value: String, focus: Int }
 let editor_field (id: Int) (label: String) (value: String) (x: Int) (y: Int) (w: Int) (focus: Int): Field = {
-    ui.text(label, x, y, 14, ui.muted(()));
+    ui.text(label, x, y, FieldLabel, ui.muted(()));
     let next = ui.field(id, value, x, y + 24, w, 36, focus == id);
     Field { value: next, focus: if ui.clicked(x, y + 24, w, 36) { id } else { focus } }
 }
 
-let draw_editor (s: State): State = {
-    ui.text(if s.draft.id == "" { "Add a game" } else { "Edit game" }, 220, 30, 30, ui.ink(()));
-    let cancel = action(s, 210, "Cancel", ui.width(()) - 296, 28, 108, 40, 0, false);
-    let save = action(s, 211, "Save changes", ui.width(()) - 172, 28, 140, 40, 1, false);
+let draw_editor (s: workflow.State): workflow.State = {
+    ui.text(if s.draft.id == "" { "Add a game" } else { "Edit game" }, 220, 30, EditorTitle, ui.ink(()));
+    let cancel = action(s, 210, "Cancel", ui.width(()) - 296, 28, 108, 40, StandardButton, false);
+    let save = action(s, 211, "Save changes", ui.width(()) - 172, 28, 140, 40, PrimaryButton, false);
     draw_cover(cover_path(s), if s.draft.title == "" { "Your game" } else { s.draft.title }, 220, 106, 218, 327);
-    let artwork = action(s, 212, "Choose cover", 220, 454, 218, 38, 0, false);
-    ui.text("Artwork stays in your library.", 220, 508, 13, ui.muted(()));
+    let artwork = action(s, 212, "Choose cover", 220, 454, 218, 38, StandardButton, false);
+    ui.text("Artwork stays in your library.", 220, 508, Caption, ui.muted(()));
     let x = 478;
     let w = ui.width(()) - x - 32;
     let content_height = 624 + s.draft.arguments.len() * 52;
@@ -322,14 +235,14 @@ let draw_editor (s: State): State = {
     ui.clip(x - 4, 96, w + 8, ui.height(()) - 164);
     let title = editor_field(1, "Title", s.draft.title, x, y, w, s.focus);
     let target = editor_field(2, "Executable or shortcut", s.draft.target, x, y + 78, w - 98, title.focus);
-    let browse = action(s, 213, "Browse", x + w - 88, y + 102, 88, 36, 0, false);
+    let browse = action(s, 213, "Browse", x + w - 88, y + 102, 88, 36, StandardButton, false);
     let description = editor_field(5, "Description", s.draft.description, x, y + 156, w, target.focus);
     let developer = editor_field(6, "Developer", s.draft.developer, x, y + 234, w - 120, description.focus);
     let year = editor_field(7, "Release year", s.draft.release_year, x + w - 108, y + 234, 108, developer.focus);
     let tags = editor_field(8, "Tags (comma separated)", s.tags_text, x, y + 312, w, year.focus);
     let directory = editor_field(3, "Working directory (blank uses default)", s.draft.working_directory, x, y + 390, w, tags.focus);
-    ui.text("Launch arguments", x, y + 478, 18, ui.ink(()));
-    ui.text("One value per row. Spaces are kept inside each argument.", x, y + 506, 13, ui.muted(()));
+    ui.text("Launch arguments", x, y + 478, SectionTitle, ui.ink(()));
+    ui.text("One value per row. Spaces are kept inside each argument.", x, y + 506, Caption, ui.muted(()));
     let arguments = s.draft.arguments;
     let focus = directory.focus;
     let remove_index = -1;
@@ -339,18 +252,18 @@ let draw_editor (s: State): State = {
             let value = ui.field(1000 + i, s.draft.arguments[i], x, ay, w - 48, 36, focus == 1000 + i);
             if value != s.draft.arguments[i] { arguments = arguments.set(i, value); };
             if ui.clicked(x, ay, w - 48, 36) { focus = 1000 + i; };
-            if action(s, 2000 + i, "x", x + w - 36, ay, 36, 36, 0, false) { remove_index = i; };
+            if action(s, 2000 + i, "x", x + w - 36, ay, 36, 36, StandardButton, false) { remove_index = i; };
         };
     };
-    let add_arg = action(s, 214, "+ Add argument", x, y + 536 + s.draft.arguments.len() * 52, 170, 36, 0, false);
+    let add_arg = action(s, 214, "+ Add argument", x, y + 536 + s.draft.arguments.len() * 52, 170, 36, StandardButton, false);
     ui.unclip(());
-    let next = State {
+    let next = workflow.State {
         draft: library.Game { title: title.value, target: target.value, description: description.value,
             developer: developer.value, release_year: year.value, working_directory: directory.value,
             tags: Array.filter(Array.map(tags.value.split(","), |tag| tag.trim()), |tag| tag != ""),
             arguments: if remove_index >= 0 { arguments.remove(remove_index) } else if add_arg && arguments.len() < 256 { arguments.push("") } else { arguments }, ..s.draft },
         focus: focus, tags_text: tags.value, editor_scroll: scroll, ..s };
-    if cancel { request(next, 4) }
+    if cancel { flow.request(next, CancelEditor) }
     else if save || ((ui.down(341) || ui.down(345)) && ui.key(83)) { save_game(next) }
     else if browse { select_target(next) }
     else if artwork { choose_artwork(next) }
@@ -358,15 +271,15 @@ let draw_editor (s: State): State = {
     else { next }
 }
 
-let focus_ids (s: State): Array[Int] =
-    if s.pending != 0 { [900, 901, 902] }
+let focus_ids (s: workflow.State): Array[Int] =
+    if flow.confirming(s) { [900, 901, 902] }
     else if s.dropdown != 0 {
         let ids: Array[Int] = [];
         for i in 0..menu_items(s).len() { ids = ids.push(700 + i); };
         ids
     }
-    else if s.view == 0 { [100, 101, 102, 0, 110, 111, 300] }
-    else if s.view == 1 { [100, 101, 102, 200, 201, 202, 203, 204, 205] }
+    else if s.screen == LibraryScreen { [100, 101, 102, 0, 110, 111, 300] }
+    else if s.screen == DetailsScreen { [100, 101, 102, 200, 201, 202, 203, 204, 205] }
     else {
         let ids = [100, 101, 102, 210, 211, 212, 1, 2, 213, 5, 6, 7, 8, 3];
         for i in 0..s.draft.arguments.len() { ids = ids.push(1000 + i).push(2000 + i); };
@@ -381,97 +294,94 @@ let editor_focus_y (focus: Int) (args: Int): Int =
     else if focus >= 2000 && focus < 2256 { 640 + (focus - 2000) * 52 }
     else if focus == 214 { 640 + args * 52 } else { -1 }
 
-let keyboard (s: State): State = {
+let keyboard (s: workflow.State): workflow.State = {
     let ids = focus_ids(s);
     let at = Array.index_of(ids, s.focus).unwrap_or(0);
-    if s.view == 1 && s.focus == -2 { State { focus: 201, ..s } }
-    else if s.dropdown != 0 && ui.key(256) { State { dropdown: 0, focus: if s.dropdown == 1 { 110 } else { 111 }, ..s } }
+    if s.dropdown != 0 && ui.key(256) { workflow.State { dropdown: 0, focus: if s.dropdown == 1 { 110 } else { 111 }, ..s } }
     else if s.dropdown != 0 && (ui.key(264) || ui.key(265) || ui.key(258)) {
         let delta = if ui.key(265) || (ui.key(258) && (ui.down(340) || ui.down(344))) { ids.len() - 1 } else { 1 };
         let index = (at + delta) % ids.len();
-        State { focus: ids[index], menu_scroll: if index < s.menu_scroll { index }
+        workflow.State { focus: ids[index], menu_scroll: if index < s.menu_scroll { index }
             else if index >= s.menu_scroll + 8 { index - 7 } else { s.menu_scroll }, ..s }
     }
     else if ui.key(258) {
         let focus = ids[(at + (if ui.down(340) || ui.down(344) { ids.len() - 1 } else { 1 })) % ids.len()];
         let field_y = editor_focus_y(focus, s.draft.arguments.len());
-        let scroll = if s.view != 2 || field_y < 0 { s.editor_scroll }
+        let scroll = if !flow.editing(s) || field_y < 0 { s.editor_scroll }
             else if field_y < 96 + s.editor_scroll { Int.max(0, field_y - 104) }
             else if field_y + 60 > ui.height(()) - 68 + s.editor_scroll { field_y + 60 - (ui.height(()) - 68) }
             else { s.editor_scroll };
-        State { focus: focus, editor_scroll: scroll, ..s }
-    } else if s.pending != 0 && ui.key(256) { State { pending: 0, ..s } }
-    else if s.pending == 0 && (ui.down(341) || ui.down(345)) && ui.key(70) && s.view == 0 { State { focus: 0, ..s } }
-    else if s.pending == 0 && s.view == 0 && s.focus == 300 && s.visible.len() > 0 {
-        if ui.key(257) { State { focus: -2, ..open_game(s, s.visible[Int.min(s.selected, s.visible.len() - 1)] ) } }
+        workflow.State { focus: focus, editor_scroll: scroll, ..s }
+    } else if flow.confirming(s) && ui.key(256) { flow.keep_editing(s) }
+    else if !flow.confirming(s) && (ui.down(341) || ui.down(345)) && ui.key(70) && s.screen == LibraryScreen { workflow.State { focus: 0, ..s } }
+    else if !flow.confirming(s) && s.screen == LibraryScreen && s.focus == 300 && s.visible.len() > 0 {
+        if ui.key(257) {
+            ui.consume_activation(());
+            open_game(s, s.visible[Int.min(s.selected, s.visible.len() - 1)])
+        }
         else {
             let delta = if ui.key(262) { 1 } else if ui.key(263) { -1 } else if ui.key(264) { columns(()) } else if ui.key(265) { 0 - columns(()) } else { 0 };
             let selected = Int.max(0, Int.min(s.visible.len() - 1, s.selected + delta));
             let sy = (selected / columns(())) * row_height(());
-            State { selected: selected, scroll: if delta == 0 { s.scroll }
+            workflow.State { selected: selected, scroll: if delta == 0 { s.scroll }
                 else if sy < s.scroll { sy }
                 else if sy + row_height(()) > s.scroll + ui.height(()) - 218 { sy + row_height(()) - (ui.height(()) - 218) }
                 else { s.scroll }, ..s }
         }
-    } else if s.pending == 0 && ui.key(256) {
-        if s.view == 2 { request(s, 4) }
-        else if s.view == 1 { request(s, 2) }
-        else { State { focus: 300, ..s } }
+    } else if !flow.confirming(s) && ui.key(256) {
+        if flow.editing(s) { flow.request(s, CancelEditor) }
+        else if s.screen == DetailsScreen { flow.request(s, ShowLibrary) }
+        else { workflow.State { focus: 300, ..s } }
     } else { s }
 }
 
-let draw_confirmation (s: State): State = {
+let draw_confirmation (s: workflow.State): workflow.State = {
     let x = (ui.width(()) - 580) / 2;
     let y = (ui.height(()) - 224) / 2;
     ui.round_rect(x, y, 580, 224, ui.surface(()));
     ui.outline(x, y, 580, 224, ui.accent(()));
-    ui.text("Keep your changes?", x + 28, y + 26, 27, ui.ink(()));
-    ui.text("Save this game before continuing, or discard your edits.", x + 28, y + 78, 16, ui.muted(()));
-    let save = action(s, 900, "Save changes", x + 28, y + 148, 162, 42, 1, false);
-    let discard = action(s, 901, "Discard", x + 206, y + 148, 150, 42, 0, false);
-    let cancel = action(s, 902, "Keep editing", x + 372, y + 148, 180, 42, 0, false);
-    if cancel { State { pending: 0, focus: 1, ..s } }
-    else if discard { finish_pending(s) }
+    ui.text("Keep your changes?", x + 28, y + 26, DialogTitle, ui.ink(()));
+    ui.text("Save this game before continuing, or discard your edits.", x + 28, y + 78, SecondaryText, ui.muted(()));
+    let save = action(s, 900, "Save changes", x + 28, y + 148, 162, 42, PrimaryButton, false);
+    let discard = action(s, 901, "Discard", x + 206, y + 148, 150, 42, StandardButton, false);
+    let cancel = action(s, 902, "Keep editing", x + 372, y + 148, 180, 42, StandardButton, false);
+    if cancel { flow.keep_editing(s) }
+    else if discard { flow.discard(s) }
     else if save {
-        let saved = save_game(s);
-        if saved.view == 1 { finish_pending(saved) } else { saved }
+        match persist(s) {
+            Err(e) => message(s, e),
+            Ok(saved) => flow.saved_and_continue(s, saved),
+        }
     } else { s }
 }
 
-let loop (s: State): Unit =
+let loop (s: workflow.State): Unit =
     if s.quit || ui.done(()) { ui.close(()) }
     else {
         ui.begin(());
-        let closed = if ui.close_requested(()) { request(s, 1) } else { s };
+        let closed = if ui.close_requested(()) { flow.request(s, CloseLauncher) } else { s };
         let keys = keyboard(closed);
-        ui.enable(keys.pending == 0);
+        ui.enable(!flow.confirming(keys));
         let navigation = draw_navigation(keys);
-        let content = if navigation.view == 0 { draw_grid(navigation) }
-            else if navigation.view == 1 { draw_detail(navigation) } else { draw_editor(navigation) };
+        let content = if navigation.screen == LibraryScreen { draw_grid(navigation) }
+            else if navigation.screen == DetailsScreen { draw_detail(navigation) } else { draw_editor(navigation) };
         ui.rect(188, ui.height(()) - 52, ui.width(()) - 188, 52, ui.canvas(()));
         ui.clip(220, ui.height(()) - 42, ui.width(()) - 252, 36);
-        ui.text(if content.status != "" { content.status } else if dirty(content) { "Unsaved changes" }
-            else if content.view == 0 { "Tab to the library. Arrow keys browse. Enter opens a game." }
-            else if content.view == 1 { "Your game runs independently of Powerlaunch." } else { "Ctrl+S saves. Escape returns." },
-            220, ui.height(()) - 32, 14, if content.blocked { ui.warning(()) } else { ui.muted(()) });
+        ui.text(if content.status != "" { content.status } else if flow.dirty(content) { "Unsaved changes" }
+            else if content.screen == LibraryScreen { "Tab to the library. Arrow keys browse. Enter opens a game." }
+            else if content.screen == DetailsScreen { "Your game runs independently of Powerlaunch." } else { "Ctrl+S saves. Escape returns." },
+            220, ui.height(()) - 32, FieldLabel, if !content.store.writable { ui.warning(()) } else { ui.muted(()) });
         ui.unclip(());
         ui.enable(true);
-        let next = if keys.pending != 0 { draw_confirmation(content) } else { content };
+        let next = if flow.confirming(keys) { draw_confirmation(content) } else { content };
         ui.end(());
         loop(next)
     }
 
 let start (root: String): Unit = {
-    let prepared = Result.and_then(platform.ensure_dir(root), |ignored| platform.ensure_dir(root.concat("/artwork")));
-    let loaded = Result.and_then(prepared, |ignored| library.load(root.concat("/library.json")));
-    let lib = loaded.unwrap_or(library.empty(()));
-    let status = match loaded { Ok(value) => "", Err(e) => "Library could not be opened. Saving is disabled: ".concat(e) };
+    let opened = storage.open(root);
     ui.init(());
-    loop(State { lib: lib, visible: library.browse(lib, "", false, "", 0), tags: library.all_tags(lib),
-        draft: library.draft(()), original: library.draft(()), root: root, query: "", tag: "", sort: 0,
-        dropdown: 0, menu_scroll: 0, favorites: false, view: 0, focus: 300, selected: 0, scroll: 0, editor_scroll: 0,
-        artwork_source: "", tags_text: "", status: status, blocked: loaded.is_err(), removing: false,
-        missing: false, pending: 0, quit: false })
+    loop(flow.initial(opened.lib, opened.store, opened.error))
 }
 
 let desktop_main (): Unit = match platform.data_root(()) {

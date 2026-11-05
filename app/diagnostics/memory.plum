@@ -1,5 +1,7 @@
 use library;
 use Os;
+use storage;
+use workflow as flow;
 
 // Exercises production model/persistence operations without opening the graphics
 // driver. Sanitizers can then attribute ownership errors independently of Mesa.
@@ -14,9 +16,20 @@ pub let run (cycles: Int): Unit = {
     assert_eq(lib.games.len(), 100);
     let dir = Os.temp_dir(()).unwrap_or("");
     assert(dir != "");
-    let path = dir.concat("/library.json");
+    let opened = storage.open(dir);
+    assert(opened.store.writable);
+    let source = dir.concat("/source.png");
+    assert(Os.write_file(source, "graphics-free cover fixture").is_ok());
+    let state = flow.initial(lib, opened.store, "");
     for i in 0..cycles {
         let game = library.Game { description: "Iteration ".concat(i.to_string()), ..lib.games[i % lib.games.len()] };
+        state = flow.open_game(state, game, false);
+        state = workflow.State { screen: EditorScreen,
+            draft: library.Game { description: "Unsaved edit", ..game }, ..state };
+        state = flow.request(state, ShowLibrary);
+        assert(flow.confirming(state));
+        state = flow.keep_editing(state);
+        assert(flow.dirty(state));
         lib = library.upsert(lib, game).unwrap_or(library.empty(()));
         let visible = library.browse(lib, "fixture", false, "Adventure", i % 3);
         assert_eq(visible.len(), 100);
@@ -24,11 +37,18 @@ pub let run (cycles: Int): Unit = {
         lib = library.decode(text).unwrap_or(library.empty(()));
         assert_eq(lib.games.len(), 100);
         if i % 25 == 0 {
-            assert(Result.is_ok(library.save(path, lib)));
-            lib = library.load(path).unwrap_or(library.empty(()));
-            assert_eq(lib.games.len(), 100);
+            match storage.save_game(opened.store, lib, game, source) {
+                Err(e) => { println(e); assert(false) },
+                Ok(saved) => {
+                    lib = saved.lib;
+                    state = flow.saved_and_continue(state, flow.saved(state, lib, saved.game, false));
+                    lib = storage.open(dir).lib;
+                    assert_eq(lib.games.len(), 100);
+                    assert(!flow.dirty(state))
+                },
+            };
         };
     };
     assert(Result.is_ok(Os.remove_tree(dir)));
-    println("Memory workload passed: ".concat(cycles.to_string()).concat(" edit/filter/sort/JSON cycles; 100 games."))
+    println("Memory workload passed: ".concat(cycles.to_string()).concat(" edit/navigation/filter/sort/JSON cycles; 100 games; managed-cover commits/reloads."))
 }
