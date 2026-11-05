@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-worker-', dir=ROOT / 'build
     env, options = environment()
     env.update(POWERLAUNCH_MEMORY_REPORT='1', POWERLAUNCH_SCROLL_FIXTURES=folder)
     output = root / ('worker.exe' if os.name == 'nt' else 'worker')
-    subprocess.run([PLUM, 'build', str(root), '-o', str(output), *options], env=env, cwd=ROOT, check=True)
+    subprocess.run([PLUM, 'build', str(root.relative_to(ROOT)), '-o', str(output.relative_to(ROOT)), *options], env=env, cwd=ROOT, check=True)
     result = subprocess.run([str(output)], env=env, text=True, capture_output=True, timeout=60)
     print(result.stderr, end='')
     if result.returncode:

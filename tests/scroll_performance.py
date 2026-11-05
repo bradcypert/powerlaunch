@@ -60,7 +60,7 @@ if __name__ == '__main__':
             env, options = environment()
             env.update(ASAN_OPTIONS='detect_leaks=0:halt_on_error=1')
         executable=ROOT/'build'/('cover-scroll.exe' if os.name == 'nt' else 'cover-scroll')
-        subprocess.run([PLUM,'build',str(project),'-o',str(executable),*options],cwd=ROOT,env=env,check=True)
+        subprocess.run([PLUM,'build',str(project.relative_to(ROOT)),'-o',str(executable.relative_to(ROOT)),*options],cwd=ROOT,env=env,check=True)
         fixtures = Path(folder) / 'images'
         fixtures.mkdir()
         for i in range(args.games):
