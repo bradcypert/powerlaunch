@@ -85,3 +85,13 @@ annotation `geo.Point` with `unknown type: geo.Point`. Changing just the
 annotation to `shapes.Point` passes. Issue #440 contains the complete two-file
 fixture and references the types requirement in the earlier alias issue #44.
 Powerlaunch uses canonical module names for types while keeping function aliases.
+
+## New candidate: exclusive file creation
+
+Clipboard game-folder export needs to create a new file without replacing an
+existing one, including the check/create race. `Os.write_bytes` provides atomic
+replacement, which is a different operation. `app/native/exclusive_file.c` adds a
+small UTF-8 create-new adapter (POSIX O_EXCL / Windows _O_EXCL), while filename
+selection and rollback stay in Plum. A standard create-new Bytes write returning
+AlreadyExists distinctly would remove this reusable C code. This is a newly
+identified candidate, not an additional filed issue.

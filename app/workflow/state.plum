@@ -24,7 +24,7 @@ pub struct State {
     pub selected: Int,
     pub scroll: Int,
     pub editor_scroll: Int,
-    pub artwork_source: String,
+    pub artwork: storage.Artwork,
     pub tags_text: String,
     pub status: String,
     pub removing: Bool,
@@ -35,7 +35,7 @@ pub struct State {
 
 pub let confirming (s: State): Bool = match s.screen { ConfirmScreen(_) => true, _ => false }
 pub let editing (s: State): Bool = s.screen == EditorScreen || confirming(s)
-pub let dirty (s: State): Bool = editing(s) && (s.draft != s.original || s.artwork_source != ""
+pub let dirty (s: State): Bool = editing(s) && (s.draft != s.original || s.artwork != UnchangedArtwork
     || s.tags_text != Array.join(s.original.tags, ", "))
 
 pub let refresh (s: State): State = {
@@ -46,16 +46,16 @@ pub let refresh (s: State): State = {
 }
 
 pub let open_game (s: State) (game: library.Game) (missing: Bool): State = State {
-    draft: game, original: game, artwork_source: "", focus: 201, screen: DetailsScreen,
+    draft: game, original: game, artwork: UnchangedArtwork, focus: 201, screen: DetailsScreen,
     tags_text: Array.join(game.tags, ", "), status: "", removing: false,
     missing: missing, editor_scroll: 0, dropdown: 0, ..s }
 
 let new_game (s: State): State = State {
-    draft: library.draft(()), original: library.draft(()), artwork_source: "",
+    draft: library.draft(()), original: library.draft(()), artwork: UnchangedArtwork,
     tags_text: "", dropdown: 0, screen: EditorScreen, focus: 1, editor_scroll: 0, status: "", removing: false, ..s }
 
 let navigate (s: State) (destination: Destination): State = {
-    let clean = State { dropdown: 0, menu_scroll: 0, draft: s.original, artwork_source: "",
+    let clean = State { dropdown: 0, menu_scroll: 0, draft: s.original, artwork: UnchangedArtwork,
         tags_text: Array.join(s.original.tags, ", "), status: "", ..s };
     match destination {
         CloseLauncher => State { quit: true, ..clean },
@@ -80,11 +80,11 @@ pub let keep_editing (s: State): State =
 // Called only after the store commits. Failed effects never change this state.
 pub let saved (s: State) (lib: library.Library) (game: library.Game) (missing: Bool): State =
     refresh(State { lib: lib, draft: game, original: game, screen: DetailsScreen, focus: 201,
-        artwork_source: "", tags_text: Array.join(game.tags, ", "), status: "Changes saved.",
+        artwork: UnchangedArtwork, tags_text: Array.join(game.tags, ", "), status: "Changes saved.",
         removing: false, missing: missing, ..s })
 
 pub let saved_and_continue (before: State) (saved: State): State = match before.screen {
-    ConfirmScreen(destination) => navigate(saved, destination),
+    ConfirmScreen(destination) => State { status: saved.status, ..navigate(saved, destination) },
     _ => saved,
 }
 
@@ -92,7 +92,7 @@ pub let initial (lib: library.Library) (store: storage.Store) (status: String): 
     State { lib: lib, visible: library.browse(lib, "", false, "", 0), tags: library.all_tags(lib),
         draft: library.draft(()), original: library.draft(()), store: store, query: "", tag: "", sort: 0,
         dropdown: 0, menu_scroll: 0, favorites: false, screen: LibraryScreen, focus: 300, selected: 0,
-        scroll: 0, editor_scroll: 0, artwork_source: "", tags_text: "", status: status,
+        scroll: 0, editor_scroll: 0, artwork: UnchangedArtwork, tags_text: "", status: status,
         removing: false, missing: false, quit: false }
 
 pub let test_unsaved_navigation_is_explicit_and_cancelable (): Unit = {

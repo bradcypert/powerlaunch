@@ -16,6 +16,10 @@ log = ROOT / "build/memory-sanitizer.log"
 with log.open("w", encoding="utf-8") as stream:
     result = subprocess.run([str(ROOT / "build/powerlaunch-asan")], cwd=ROOT,
         env=env, stdout=stream, stderr=subprocess.STDOUT)
+    if result.returncode == 0:
+        stream.flush()
+        result = subprocess.run([sys.executable, "tests/clipboard_integration.py"], cwd=ROOT,
+            env=env, stdout=stream, stderr=subprocess.STDOUT)
 print(log.read_text(encoding="utf-8", errors="replace"))
 if result.returncode:
     raise SystemExit(result.returncode)

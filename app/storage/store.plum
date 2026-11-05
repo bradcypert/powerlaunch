@@ -4,7 +4,59 @@ use Os;
 
 pub struct Store { pub root: String, pub writable: Bool }
 pub struct Opened { pub store: Store, pub lib: library.Library, pub error: String }
-pub struct Saved { pub lib: library.Library, pub game: library.Game }
+pub struct Saved { pub lib: library.Library, pub game: library.Game, pub notice: String }
+pub enum Artwork { UnchangedArtwork, SelectedArtwork(String), PastedArtwork(String) }
+struct GameCoverCopy { path: String, notice: String }
+
+pub let artwork_source (artwork: Artwork): String = match artwork {
+    UnchangedArtwork => "", SelectedArtwork(path) | PastedArtwork(path) => path,
+}
+
+pub let stage_clipboard (store: Store) (png: Bytes): Result[Artwork, String] =
+    if !store.writable { Err("Library recovery is required before artwork can be saved.") }
+    else {
+        let directory = store.root.concat("/drafts");
+        let path = directory.concat("/").concat(platform.unique_token(())).concat(".png");
+        Result.and_then(platform.ensure_dir(directory), |ignored|
+            Result.map(Os.write_bytes(path, png), |ignored| PastedArtwork(path)))
+    }
+
+// Called by the effect adapter after a transition, never from pure workflow code.
+// Selected user files are borrowed and must never be removed.
+pub let release_artwork (before: Artwork) (after: Artwork): Result[Unit, String] =
+    if before == after { Ok(()) }
+    else { match before { PastedArtwork(path) => Os.remove_file(path), _ => Ok(()) } }
+
+let copy_to_game (directory: String) (bytes: Bytes) (number: Int): Result[String, String] =
+    if number > 1000 { Err("Too many existing Powerlaunch covers in the game folder.") }
+    else {
+        let name = "powerlaunch_cover".concat(if number == 1 { "" } else { "-".concat(number.to_string()) }).concat(".png");
+        let path = directory.concat("/").concat(name);
+        Result.and_then(platform.write_new(path, bytes), |created|
+            if created { Ok(path) } else { copy_to_game(directory, bytes, number + 1) })
+    }
+
+let game_copy (game: library.Game) (artwork: Artwork): GameCoverCopy = match artwork {
+    PastedArtwork(source) => {
+        // A shortcut's own folder could be the Desktop, not the game's folder.
+        let directory = if game.target.to_lower().ends_with(".lnk") { game.working_directory }
+            else { platform.parent(game.target) };
+        let copied = if directory == "" {
+            Err("Set the shortcut's working directory to also save a cover in its game folder.")
+        } else { Result.and_then(Os.read_bytes(source), |bytes| copy_to_game(directory, bytes, 1)) };
+        match copied {
+            Ok(path) => GameCoverCopy { path: path, notice: "Changes saved. Cover also saved to ".concat(path) },
+            Err(e) => GameCoverCopy { path: "", notice: "Changes saved. Cover kept in your library only. ".concat(e) },
+        }
+    },
+    _ => GameCoverCopy { path: "", notice: "Changes saved." },
+}
+
+let rollback (path: String): String =
+    if path == "" { "" } else { match Os.remove_file(path) {
+        Ok(_) => "", Err(e) => " Cover rollback also failed: ".concat(e),
+    } }
+
 
 pub let open (root: String): Opened = {
     let prepared = Result.and_then(platform.ensure_dir(root), |ignored| platform.ensure_dir(root.concat("/artwork")));
@@ -21,26 +73,23 @@ let write (store: Store) (lib: library.Library): Result[Unit, String] =
 // Metadata replacement is the commit point. Never return the new library until
 // it succeeds; on failure remove only the artwork created by this operation.
 // Existing/shared covers are deliberately retained until reference tracking exists.
-pub let save_game (store: Store) (lib: library.Library) (draft: library.Game) (artwork: String): Result[Saved, String] =
+pub let save_game (store: Store) (lib: library.Library) (draft: library.Game) (artwork: Artwork): Result[Saved, String] =
     if !store.writable { Err("Library recovery is required before changes can be saved.") }
     else { Result.and_then(library.upsert(lib, draft), |updated| {
         let game = if draft.id == "" { updated.games[updated.games.len() - 1] }
             else { Array.find(updated.games, |g| g.id == draft.id).unwrap_or(draft) };
-        let imported = if artwork == "" { Ok("") }
-            else { Result.map_err(platform.import_artwork(store.root, artwork), |e| "Could not copy cover: ".concat(e)) };
+        let source = artwork_source(artwork);
+        let imported = if source == "" { Ok("") }
+            else { Result.map_err(platform.import_artwork(store.root, source), |e| "Could not copy cover: ".concat(e)) };
         Result.and_then(imported, |name| {
             let covered = if name == "" { game } else { library.Game { cover: name, ..game } };
+            let exported = game_copy(covered, artwork);
             let committed = Result.and_then(library.upsert(updated, covered), |with_artwork|
-                Result.map(write(store, with_artwork), |ignored| Saved { lib: with_artwork, game: covered }));
+                Result.map(write(store, with_artwork), |ignored| Saved { lib: with_artwork, game: covered, notice: exported.notice }));
             match committed {
                 Ok(saved) => Ok(saved),
-                Err(e) => {
-                    if name == "" { Err(e) }
-                    else { match Os.remove_file(store.root.concat("/artwork/").concat(name)) {
-                        Ok(_) => Err(e),
-                        Err(cleanup) => Err(e.concat(" Cover rollback also failed: ").concat(cleanup)),
-                    } }
-                },
+                Err(e) => Err(e.concat(rollback(if name == "" { "" } else { cover_path(store, name) }))
+                    .concat(rollback(exported.path))),
             }
         })
     }) }
@@ -64,7 +113,7 @@ pub let test_commit_failure_rolls_back_only_new_artwork (): Unit = {
     // A directory at the metadata path forces atomic replacement to fail.
     assert(Os.make_dir(root.concat("/library.json")).is_ok());
     let game = library.Game { title: "Game", target: "/game", ..library.draft(()) };
-    assert(save_game(opened.store, opened.lib, game, source).is_err());
+    assert(save_game(opened.store, opened.lib, game, SelectedArtwork(source)).is_err());
     assert_eq(Os.list_dir(root.concat("/artwork")).unwrap_or([]), ["existing.png"]);
     assert_eq(Os.read_file(old_cover), Ok("keep"));
     assert(Os.remove_tree(root).is_ok())
@@ -78,13 +127,13 @@ pub let test_recovery_store_rejects_mutation_and_success_reloads_artwork (): Uni
     assert(Os.write_file(root.concat("/library.json"), "broken").is_ok());
     let recovery = open(root);
     assert(!recovery.store.writable);
-    assert(save_game(recovery.store, recovery.lib, game, "").is_err());
+    assert(save_game(recovery.store, recovery.lib, game, UnchangedArtwork).is_err());
     assert(remove_game(recovery.store, recovery.lib, "game-1").is_err());
     assert_eq(Os.read_file(root.concat("/library.json")), Ok("broken"));
     assert(Os.remove_file(root.concat("/library.json")).is_ok());
     let source = root.concat("/source.png");
     assert(Os.write_file(source, "cover fixture").is_ok());
-    match save_game(opened.store, opened.lib, game, source) {
+    match save_game(opened.store, opened.lib, game, SelectedArtwork(source)) {
         Err(e) => { println(e); assert(false) },
         Ok(saved) => {
             assert(Os.remove_file(source).is_ok());
@@ -94,5 +143,79 @@ pub let test_recovery_store_rejects_mutation_and_success_reloads_artwork (): Uni
             assert_eq(open(root).lib.games.len(), 0)
         },
     };
+    assert(Os.remove_tree(root).is_ok())
+}
+
+pub let test_pasted_cover_export_preserves_existing_files_and_draft_lifetime (): Unit = {
+    let root = Os.temp_dir(()).unwrap_or("");
+    assert(root != "");
+    let opened = open(root);
+    let directory = root.concat("/game Café");
+    assert(platform.ensure_dir(directory).is_ok());
+    let existing = directory.concat("/powerlaunch_cover.png");
+    assert(Os.write_file(existing, "user cover").is_ok());
+    let png = "new cover bytes".as_bytes();
+    let artwork = stage_clipboard(opened.store, png).unwrap_or(UnchangedArtwork);
+    assert(artwork != UnchangedArtwork);
+    let game = library.Game { title: "Game", target: directory.concat("/game.exe"), ..library.draft(()) };
+    assert_eq(Os.list_dir(directory).unwrap_or([]), ["powerlaunch_cover.png"]);
+    match save_game(opened.store, opened.lib, game, artwork) {
+        Err(e) => { println(e); assert(false) },
+        Ok(saved) => {
+            assert_eq(Os.read_file(existing), Ok("user cover"));
+            assert_eq(Os.read_bytes(directory.concat("/powerlaunch_cover-2.png")), Ok(png));
+            assert_eq(Os.read_bytes(cover_path(opened.store, saved.game.cover)), Ok(png));
+            assert(saved.notice.contains("powerlaunch_cover-2.png"));
+            assert_eq(open(root).lib, saved.lib)
+        },
+    };
+    let staged = artwork_source(artwork);
+    assert(release_artwork(artwork, artwork).is_ok());
+    assert(Os.exists(staged).unwrap_or(false));
+    assert(release_artwork(artwork, UnchangedArtwork).is_ok());
+    assert(!Os.exists(staged).unwrap_or(true));
+    assert(release_artwork(SelectedArtwork(existing), UnchangedArtwork).is_ok());
+    assert_eq(Os.read_file(existing), Ok("user cover"));
+    assert(Os.remove_tree(root).is_ok())
+}
+
+pub let test_pasted_cover_rolls_back_both_copies_on_metadata_failure (): Unit = {
+    let root = Os.temp_dir(()).unwrap_or("");
+    assert(root != "");
+    let opened = open(root);
+    let directory = root.concat("/game");
+    assert(platform.ensure_dir(directory).is_ok());
+    let artwork = stage_clipboard(opened.store, "cover".as_bytes()).unwrap_or(UnchangedArtwork);
+    assert(artwork != UnchangedArtwork);
+    assert(Os.make_dir(root.concat("/library.json")).is_ok());
+    let game = library.Game { title: "Game", target: directory.concat("/game.exe"), ..library.draft(()) };
+    assert(save_game(opened.store, opened.lib, game, artwork).is_err());
+    assert_eq(Os.list_dir(directory), Ok([]));
+    assert_eq(Os.list_dir(root.concat("/artwork")), Ok([]));
+    assert(Os.exists(artwork_source(artwork)).unwrap_or(false));
+    assert(release_artwork(artwork, UnchangedArtwork).is_ok());
+    assert(Os.remove_tree(root).is_ok())
+}
+
+pub let test_game_folder_failure_and_unknown_shortcut_keep_managed_cover (): Unit = {
+    let root = Os.temp_dir(()).unwrap_or("");
+    assert(root != "");
+    let opened = open(root);
+    let artwork = stage_clipboard(opened.store, "cover".as_bytes()).unwrap_or(UnchangedArtwork);
+    let game = library.Game { title: "Game", target: root.concat("/missing/game.exe"), ..library.draft(()) };
+    match save_game(opened.store, opened.lib, game, artwork) {
+        Err(e) => { println(e); assert(false) },
+        Ok(saved) => {
+            assert(saved.notice.contains("library only"));
+            assert_eq(Os.read_file(cover_path(opened.store, saved.game.cover)), Ok("cover"))
+        },
+    };
+    let shortcut = library.Game { target: root.concat("/desktop.lnk"), ..game };
+    match save_game(opened.store, opened.lib, shortcut, artwork) {
+        Err(e) => { println(e); assert(false) },
+        Ok(saved) => assert(saved.notice.contains("working directory")),
+    };
+    assert(!Os.exists(root.concat("/powerlaunch_cover.png")).unwrap_or(true));
+    assert(release_artwork(artwork, UnchangedArtwork).is_ok());
     assert(Os.remove_tree(root).is_ok())
 }

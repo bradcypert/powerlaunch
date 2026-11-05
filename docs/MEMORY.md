@@ -104,3 +104,19 @@ textures / 6,144,000 tracked texture bytes and released all textures on close.
 As before, private-page changes alone do not establish a heap leak. Diagnostics
 are retained locally in `build/memory-profile.json` and `memory-sanitizer.log`;
 Windows CI provides the platform-specific follow-up measurement.
+
+## Clipboard ownership checks
+
+The sanitizer check now exercises pasted-cover staging, create-new export,
+metadata commit, draft cleanup and reload in the production Plum workload.
+It also runs fifty native PNG capture/decode/release cycles and fifty calls through
+`clipboard.image`, including the actual Plum handle and `Bytes.from_cstr` copy-out.
+The latter uses an injected 320x480 image getter to avoid clipboard/display/GPU
+state. All ran cleanly under ASan/LSan locally; native clipboard conversion is
+separately exercised with actual CF_DIB data in Windows CI and real PNG selection
+in the Xvfb UI test. Native capture and encoded PNG buffers are released before
+the UI retains only the staged file and its bounded cached preview texture.
+
+Captures above 16 megapixels or 64 MiB encoded PNG are rejected. The backend may
+allocate decoded image memory before the dimension check; these are accepted
+image limits, not a promise about peak process memory for arbitrary clipboard data.
