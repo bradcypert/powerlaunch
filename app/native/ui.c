@@ -208,6 +208,23 @@ void pl_ui_field(long long id, const char *text, long long x, long long y, long 
     if (pl_ui_hover(x, y, w, h)) requested_cursor = MOUSE_CURSOR_IBEAM;
     memcpy(field_buffer, text, strlen(text) + 1);
     GuiTextBox(box(x, y, w, h), field_buffer, FIELD_BYTES, editing);
+    // This raygui version has no text-paste handler. Keep Ctrl+V local to the
+    // active field; the cover paste shortcut is handled separately in Plum.
+    if (input_enabled && editing && IsKeyPressed(KEY_V) &&
+        (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL))) {
+        const char *paste = GetClipboardText();
+        size_t length = strlen(field_buffer);
+        size_t added = paste ? strlen(paste) : 0;
+        if (added && added < FIELD_BYTES - length) {
+            size_t cursor = textBoxCursorIndex < 0 ? 0 : (size_t)textBoxCursorIndex;
+            if (cursor > length) cursor = length;
+            memmove(field_buffer + cursor + added, field_buffer + cursor, length - cursor + 1);
+            memcpy(field_buffer + cursor, paste, added);
+            for (size_t i = cursor; i < cursor + added; i++)
+                if (field_buffer[i] == '\r' || field_buffer[i] == '\n') field_buffer[i] = ' ';
+            textBoxCursorIndex = (int)(cursor + added);
+        }
+    }
 }
 const char *pl_ui_value(long long id) { (void)id; return field_buffer; }
 int pl_ui_image_valid(const char *path) {

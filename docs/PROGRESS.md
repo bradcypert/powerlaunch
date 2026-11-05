@@ -139,3 +139,34 @@ remain outstanding.
   artwork commits/reloads as well as filtering and JSON; no ASan/LSan findings.
 - Small-text rasterization intentionally remains unchanged during this refactor.
   Windows native-size/DPI comparisons and icon redesign remain follow-up work.
+
+## Clipboard covers
+
+- The editor offers Paste cover and Ctrl+V while the cover area or cover controls
+  have keyboard focus. Text fields paste text locally; image shortcuts do not
+  replace text-field behavior.
+- Clipboard images are converted to PNG through a small raylib adapter and copied
+  into Plum Bytes. A Plum handle releases the native PNG buffer deterministically.
+  Supported image capture: Windows and the tested raylib X11 Linux backend.
+  macOS/native Wayland image paste remains unsupported; Choose cover still works.
+- Pasted PNGs are staged under the library's `drafts/` directory. Replacing,
+  discarding, saving, and normal closing release the old draft. No game-folder
+  file is written until Save. A crash can leave a draft file for future cleanup.
+- Save retains the existing managed-library artwork and also creates
+  `powerlaunch_cover.png` beside an executable. Existing names are never replaced;
+  subsequent files use `powerlaunch_cover-2.png`, etc. Create-new OS writes prevent
+  accidental overwrite even if another process creates the file concurrently.
+- For `.lnk` entries, the configured working directory supplies the game folder;
+  we do not write next to a shortcut on the Desktop. Missing/unwritable folders
+  keep the managed cover and show a library-only notice. Metadata-save failure
+  rolls back newly created managed/export copies while retaining the draft.
+- Fifteen Plum tests cover normal persistence plus pasted artwork collisions,
+  draft lifetime, rollback, and unavailable/unknown game-folder fallback.
+- Xvfb integration exercises a real PNG clipboard, button/focused-keyboard paste,
+  text clipboard behavior, replacement/discard cleanup, and both saved copies.
+- A native clipboard fixture repeats PNG encode/decode/release 50 times. Windows
+  CI uses actual CF_DIB clipboard data; ordinary local tests inject the getter to
+  leave the desktop clipboard alone (opt in with POWERLAUNCH_TEST_SYSTEM_CLIPBOARD=1).
+- The sanitizer workload includes pasted-cover staging/export/commit/cleanup and
+  the native clipboard ownership fixture. Actual Windows desktop/browser clipboard
+  checks and broader formats remain useful follow-up coverage.

@@ -158,3 +158,23 @@ The process adapter is deliberately generic. Upstream candidates are a
 child-specific working directory and an explicit detached-launch API. These
 should be designed and tested separately in Plum; this project does not change
 the sibling Plum checkout.
+
+### Paste a cover
+
+In Add/Edit game, click **Paste cover**, or click the cover preview and press
+**Ctrl+V** after copying an image (for example, Copy image in a browser or a
+screenshot). Paste previews the image; **Save changes** keeps it. Text fields
+accept text paste instead. Empty/text-only clipboards leave the current cover
+intact and show a message.
+
+Saving creates a managed library copy and, when possible, `powerlaunch_cover.png`
+in the executable's folder. An existing file is preserved and a numbered name is
+used instead. Shortcuts use their configured working directory. If that directory
+is unknown or unwritable, the cover stays in the library and a message explains
+why there is no game-folder copy. Discarding the editor does not write game files.
+
+Image paste is supported on Windows and tested on Linux/X11 with the selected
+raylib backend. macOS/native Wayland image paste is not supported yet; use
+**Choose cover** there. Accepted captures are limited to 16 megapixels and a
+64 MiB encoded PNG; very large clipboard images can still require transient
+memory while the backend decodes them.

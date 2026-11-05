@@ -6,16 +6,16 @@ use workflow as flow;
 // Exercises production model/persistence operations without opening the graphics
 // driver. Sanitizers can then attribute ownership errors independently of Mesa.
 pub let run (cycles: Int): Unit = {
+    let dir = Os.temp_dir(()).unwrap_or("");
+    assert(dir != "");
     let lib = library.empty(());
     for i in 0..100 {
         let game = library.Game { title: "Memory fixture ".concat(i.to_string()),
-            target: "/memory-fixture/game", arguments: ["", "two words", "Café"],
+            target: dir.concat("/game.exe"), arguments: ["", "two words", "Café"],
             tags: ["Adventure", "Test"], ..library.draft(()) };
         lib = library.upsert(lib, game).unwrap_or(library.empty(()));
     };
     assert_eq(lib.games.len(), 100);
-    let dir = Os.temp_dir(()).unwrap_or("");
-    assert(dir != "");
     let opened = storage.open(dir);
     assert(opened.store.writable);
     let source = dir.concat("/source.png");
@@ -37,18 +37,23 @@ pub let run (cycles: Int): Unit = {
         lib = library.decode(text).unwrap_or(library.empty(()));
         assert_eq(lib.games.len(), 100);
         if i % 25 == 0 {
-            match storage.save_game(opened.store, lib, game, source) {
+            let artwork = storage.stage_clipboard(opened.store, Os.read_bytes(source).unwrap_or(Bytes.empty(())))
+                .unwrap_or(UnchangedArtwork);
+            assert(artwork != UnchangedArtwork);
+            state = workflow.State { artwork: artwork, ..state };
+            match storage.save_game(opened.store, lib, game, artwork) {
                 Err(e) => { println(e); assert(false) },
                 Ok(saved) => {
                     lib = saved.lib;
                     state = flow.saved_and_continue(state, flow.saved(state, lib, saved.game, false));
                     lib = storage.open(dir).lib;
                     assert_eq(lib.games.len(), 100);
-                    assert(!flow.dirty(state))
+                    assert(!flow.dirty(state));
+                    assert(storage.release_artwork(artwork, state.artwork).is_ok())
                 },
             };
         };
     };
     assert(Result.is_ok(Os.remove_tree(dir)));
-    println("Memory workload passed: ".concat(cycles.to_string()).concat(" edit/navigation/filter/sort/JSON cycles; 100 games; managed-cover commits/reloads."))
+    println("Memory workload passed: ".concat(cycles.to_string()).concat(" edit/navigation/filter/sort/JSON cycles; 100 games; pasted-cover stage/export/commit/cleanup/reloads."))
 }

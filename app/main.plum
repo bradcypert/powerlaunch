@@ -5,6 +5,7 @@ use Os;
 use diagnostics;
 use workflow as flow;
 use storage;
+use clipboard;
 
 let message (s: workflow.State) (text: String): workflow.State = workflow.State { status: text, ..s }
 
@@ -26,12 +27,20 @@ let choose_artwork (s: workflow.State): workflow.State = {
     let path = platform.pick_file(true);
     if path == "" { s }
     else if !ui.image_valid(path) { message(s, "This image could not be opened. Choose another cover.") }
-    else { workflow.State { artwork_source: path, status: "Cover ready. Save changes to keep it.", ..s } }
+    else { workflow.State { artwork: SelectedArtwork(path), status: "Cover ready. Save changes to keep it.", ..s } }
 }
 
+let paste_artwork (s: workflow.State): workflow.State =
+    match Result.and_then(clipboard.image(()), |png| storage.stage_clipboard(s.store, png)) {
+        Err(e) => message(s, e),
+        Ok(artwork) => workflow.State { artwork: artwork,
+            status: "Cover pasted. Save changes to keep it; the game-folder copy is written on Save.", ..s },
+    }
+
 let persist (s: workflow.State): Result[workflow.State, String] =
-    Result.map(storage.save_game(s.store, s.lib, s.draft, s.artwork_source), |saved|
-        flow.saved(s, saved.lib, saved.game, !Os.exists(saved.game.target).unwrap_or(false)))
+    Result.map(storage.save_game(s.store, s.lib, s.draft, s.artwork), |saved|
+        workflow.State { status: saved.notice,
+            ..flow.saved(s, saved.lib, saved.game, !Os.exists(saved.game.target).unwrap_or(false)) })
 
 let save_game (s: workflow.State): workflow.State = match persist(s) {
     Err(e) => message(s, e),
@@ -50,7 +59,7 @@ let play (s: workflow.State): workflow.State =
 let remove_game (s: workflow.State): workflow.State = match storage.remove_game(s.store, s.lib, s.draft.id) {
     Err(e) => message(s, e),
     Ok(updated) => flow.refresh(workflow.State { lib: updated, draft: library.draft(()),
-        original: library.draft(()), screen: LibraryScreen, removing: false, artwork_source: "",
+        original: library.draft(()), screen: LibraryScreen, removing: false, artwork: UnchangedArtwork,
         tags_text: "", status: "Removed from library. Game files were kept.", ..s }),
 }
 
@@ -74,7 +83,7 @@ let draw_navigation (s: workflow.State): workflow.State = {
 }
 
 let cover_path (s: workflow.State): String =
-    if s.artwork_source != "" { s.artwork_source }
+    if s.artwork != UnchangedArtwork { storage.artwork_source(s.artwork) }
     else { storage.cover_path(s.store, s.draft.cover) }
 
 let draw_cover (path: String) (title: String) (x: Int) (y: Int) (w: Int) (h: Int): Unit = {
@@ -223,7 +232,14 @@ let draw_editor (s: workflow.State): workflow.State = {
     let save = action(s, 211, "Save changes", ui.width(()) - 172, 28, 140, 40, PrimaryButton, false);
     draw_cover(cover_path(s), if s.draft.title == "" { "Your game" } else { s.draft.title }, 220, 106, 218, 327);
     let artwork = action(s, 212, "Choose cover", 220, 454, 218, 38, StandardButton, false);
-    ui.text("Artwork stays in your library.", 220, 508, Caption, ui.muted(()));
+    let paste = action(s, 215, "Paste cover", 220, 500, 218, 38, StandardButton, false);
+    let cover_focus = if ui.clicked(220, 106, 218, 327) { 216 } else { s.focus };
+    if cover_focus == 216 { ui.outline(217, 103, 224, 333, ui.accent(())) };
+    let over_cover = ui.interactive(220, 106, 218, 327);
+    ui.text("Click the cover, then Ctrl+V to paste.", 220, 554, Caption, ui.muted(()));
+    ui.text("Game-folder copy is written on Save.", 220, 578, Caption, ui.muted(()));
+    let paste_key = (ui.down(341) || ui.down(345)) && ui.key(86)
+        && (cover_focus == 216 || cover_focus == 215 || cover_focus == 212);
     let x = 478;
     let w = ui.width(()) - x - 32;
     let content_height = 624 + s.draft.arguments.len() * 52;
@@ -233,7 +249,7 @@ let draw_editor (s: workflow.State): workflow.State = {
     } else { s.editor_scroll };
     let y = 104 - scroll;
     ui.clip(x - 4, 96, w + 8, ui.height(()) - 164);
-    let title = editor_field(1, "Title", s.draft.title, x, y, w, s.focus);
+    let title = editor_field(1, "Title", s.draft.title, x, y, w, cover_focus);
     let target = editor_field(2, "Executable or shortcut", s.draft.target, x, y + 78, w - 98, title.focus);
     let browse = action(s, 213, "Browse", x + w - 88, y + 102, 88, 36, StandardButton, false);
     let description = editor_field(5, "Description", s.draft.description, x, y + 156, w, target.focus);
@@ -267,6 +283,7 @@ let draw_editor (s: workflow.State): workflow.State = {
     else if save || ((ui.down(341) || ui.down(345)) && ui.key(83)) { save_game(next) }
     else if browse { select_target(next) }
     else if artwork { choose_artwork(next) }
+    else if paste || paste_key { paste_artwork(next) }
     else if add_arg && arguments.len() >= 256 { message(next, "A launch configuration supports at most 256 arguments.") }
     else { next }
 }
@@ -281,7 +298,7 @@ let focus_ids (s: workflow.State): Array[Int] =
     else if s.screen == LibraryScreen { [100, 101, 102, 0, 110, 111, 300] }
     else if s.screen == DetailsScreen { [100, 101, 102, 200, 201, 202, 203, 204, 205] }
     else {
-        let ids = [100, 101, 102, 210, 211, 212, 1, 2, 213, 5, 6, 7, 8, 3];
+        let ids = [100, 101, 102, 210, 211, 212, 215, 216, 1, 2, 213, 5, 6, 7, 8, 3];
         for i in 0..s.draft.arguments.len() { ids = ids.push(1000 + i).push(2000 + i); };
         ids.push(214)
     }
@@ -356,7 +373,10 @@ let draw_confirmation (s: workflow.State): workflow.State = {
 }
 
 let loop (s: workflow.State): Unit =
-    if s.quit || ui.done(()) { ui.close(()) }
+    if s.quit || ui.done(()) {
+        let cleanup = storage.release_artwork(s.artwork, UnchangedArtwork);
+        ui.close(())
+    }
     else {
         ui.begin(());
         let closed = if ui.close_requested(()) { flow.request(s, CloseLauncher) } else { s };
@@ -374,8 +394,13 @@ let loop (s: workflow.State): Unit =
         ui.unclip(());
         ui.enable(true);
         let next = if flow.confirming(keys) { draw_confirmation(content) } else { content };
+        let cleanup = storage.release_artwork(s.artwork, next.artwork);
+        let released = match cleanup {
+            Ok(_) => next,
+            Err(e) => message(next, "Could not remove the temporary pasted cover: ".concat(e)),
+        };
         ui.end(());
-        loop(next)
+        loop(released)
     }
 
 let start (root: String): Unit = {

@@ -1,0 +1,20 @@
+extern "C" {
+    fn pl_clipboard_capture() -> Int;
+    fn pl_clipboard_error() -> CStr;
+    fn pl_clipboard_size(handle: Int) -> Int;
+    fn pl_clipboard_data(handle: Int) -> CStr;
+    fn pl_clipboard_free(handle: Int);
+}
+
+// The native PNG buffer dies deterministically after copy-out, including errors.
+handle ClipboardImage { on_drop: pl_clipboard_free }
+
+pub let image (): Result[Bytes, String] = unsafe {
+    let raw = pl_clipboard_capture();
+    if raw == 0 { Err(pl_clipboard_error().as_string()) }
+    else {
+        let capture = ClipboardImage.from_raw(raw);
+        let length = pl_clipboard_size(ClipboardImage.raw(capture));
+        Ok(Bytes.from_cstr(pl_clipboard_data(ClipboardImage.raw(capture)), length))
+    }
+}
