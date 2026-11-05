@@ -52,7 +52,9 @@ with tempfile.TemporaryDirectory(prefix="powerlaunch-ui-memory-") as folder:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     stats = re.search(r"peak_textures=(\d+) peak_texture_bytes=(\d+) textures_after_close=(\d+)", text)
     assert stats, "Native cache diagnostics were not emitted"
-    assert int(stats[1]) <= 24 and int(stats[1]) >= 20, stats[0]
+    assert 1 <= int(stats[1]) <= 128, stats[0]
+    assert int(stats[2]) <= 64 * 1024 * 1024, stats[0]
+    assert "images_after_close=0" in text, text[-2000:]
     assert int(stats[3]) == 0, stats[0]
     warm = [s for s in samples if s["cycle"] >= 1]
     assert warm

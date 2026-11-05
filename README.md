@@ -131,6 +131,7 @@ compilation. `python3 scripts/smoke_windows.py` checks that packaged application
 mise run memory             # 20-second, 2,000-game idle profile; needs a display
 mise run memory-check       # Linux ASan/LSan check without graphics initialization
 xvfb-run -a -s '-screen 0 1600x1000x24' python3 tests/ui_memory.py
+xvfb-run -a -s '-screen 0 1600x1000x24' mise exec -- python3 tests/scroll_performance.py
 ```
 
 `scripts/profile_memory.py --seconds 10 --games 2000 --covers 40` selects a custom
@@ -178,3 +179,9 @@ raylib backend. macOS/native Wayland image paste is not supported yet; use
 **Choose cover** there. Accepted captures are limited to 16 megapixels and a
 64 MiB encoded PNG; very large clipboard images can still require transient
 memory while the backend decodes them.
+
+Cover loading uses one Plum background worker and disposable thumbnails in
+`thumbnails-v1/` beside `library.json`. It is safe to delete that cache while the
+launcher is closed; originals remain in `artwork/`. It regenerates as needed and
+currently has no automatic disk pruning. GPU texture storage is bounded at
+128 textures / 64 MiB of tracked pixels; this is not a total process-memory limit.

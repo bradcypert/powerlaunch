@@ -1,0 +1,58 @@
+use desktop as ui;
+use Os;
+extern "C" { fn pl_bench_time() -> Float; fn pl_bench_pause(); fn pl_bench_unlimit(); }
+let clock (): Float = unsafe { pl_bench_time() }
+struct Measurement { times: Array[Float], ready: Bool }
+let measure (paths: Array[String]) (offset: Int) (loader: desktop.CoverLoader) (deadline: Float) (times: Array[Float]): Measurement = {
+    let start = clock(());
+    ui.pump_covers(loader);
+    ui.begin(());
+    let ready = true;
+    for i in 0..10 {
+        if !ui.cover(paths[(offset+i) % paths.len()], 220+(i%5)*190, 160+(i/5)*270, 170, 250) { ready = false; };
+    };
+    let elapsed = (clock(()) - start)*1000.0;
+    ui.end(());
+    let measured = times.push(elapsed);
+    if ready || clock(()) >= deadline { Measurement { times: measured, ready: ready } }
+    else { unsafe { pl_bench_pause() }; measure(paths, offset, loader, deadline, measured) }
+}
+let main (): Unit = {
+    let root = Os.env_var("POWERLAUNCH_SCROLL_FIXTURES").unwrap_or("");
+    let budget = Os.env_var("POWERLAUNCH_SCROLL_BUDGET").unwrap_or("16.7").parse_float().unwrap_or(16.7);
+    let paths = Array.map(Array.sort_by(Array.filter(Os.list_dir(root).unwrap_or([]), |p| p.ends_with(".png")), |a,b| a <= b), |p| root.concat("/").concat(p));
+    assert(paths.len() > 0);
+    ui.init(());
+    unsafe { pl_bench_unlimit() };
+    let loader = ui.start_cover_loader(root);
+    let times: Array[Float] = [];
+    let warm: Array[Float] = [];
+    let ready_all = true;
+    for pass in 0..2 {
+        if pass == 1 {
+            // Change the viewport without waiting for loads, then revisit it.
+            for row in 0..((paths.len()+4)/5) {
+                let rapid = measure(paths, row*5, loader, clock(()), []);
+            };
+        };
+        for row in 0..((paths.len()+4)/5) {
+            let result = measure(paths, row*5, loader, clock(())+5.0, []);
+            times = Array.concat(times, result.times);
+            if pass == 1 { warm = Array.concat(warm, result.times); };
+            if !result.ready { ready_all = false; };
+        };
+    };
+    ui.stop_cover_loader(loader);
+    ui.close(());
+    let ordered = Array.sort_by(times, |a,b| a <= b);
+    let warmed = Array.sort_by(warm, |a,b| a <= b);
+    let p95 = ordered[(ordered.len()-1)*95/100];
+    let max = ordered[ordered.len()-1];
+    let warmed_p95 = warmed[(warmed.len()-1)*95/100];
+    println("{\"games\":".concat(paths.len().to_string()).concat(",\"samples\":").concat(times.len().to_string())
+        .concat(",\"ready\":").concat(ready_all.to_string()).concat(",\"cover_frame_p95_ms\":").concat(p95.to_string())
+        .concat(",\"cover_frame_max_ms\":").concat(max.to_string()).concat(",\"warm_cover_frame_p95_ms\":").concat(warmed_p95.to_string()).concat("}"));
+    assert(ready_all);
+    assert(p95 < budget);
+    assert(warmed_p95 < budget)
+}

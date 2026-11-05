@@ -95,3 +95,12 @@ small UTF-8 create-new adapter (POSIX O_EXCL / Windows _O_EXCL), while filename
 selection and rollback stay in Plum. A standard create-new Bytes write returning
 AlreadyExists distinctly would remove this reusable C code. This is a newly
 identified candidate, not an additional filed issue.
+
+## New candidate: generated helpers for channel payloads with handles
+
+Plum 0.0.41 accepts checking a channel payload struct containing an optional
+owned handle, then fails linking because generated LLVM references a missing
+string/equality helper. See the [minimal reproduction](plum-repros/channel-owned-handle/README.md).
+Powerlaunch uses a direct handle channel with one outstanding request instead,
+retaining deterministic destruction. This is a compiler correctness candidate,
+not evidence of a runtime ownership failure. No issue filed yet.
