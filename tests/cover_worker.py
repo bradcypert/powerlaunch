@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from build import PLUM, environment
 
-with tempfile.TemporaryDirectory(prefix='powerlaunch-worker-') as folder:
+# Keep native compiler inputs on the checkout filesystem: MSYS2's virtual
+# temporary directory is not reliably shared with the Windows Plum binary.
+(ROOT / 'build').mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='powerlaunch-worker-', dir=ROOT / 'build') as folder:
     root = Path(folder)
     (root / 'desktop').mkdir()
     (root / 'native').mkdir()

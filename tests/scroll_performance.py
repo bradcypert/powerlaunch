@@ -41,7 +41,9 @@ if __name__ == '__main__':
     (ROOT/'build').mkdir(exist_ok=True)
     sys.path.insert(0,str(ROOT/'scripts'))
     from build import PLUM, environment
-    with tempfile.TemporaryDirectory(prefix='powerlaunch-scroll-') as folder:
+    # Keep native compiler inputs on the checkout filesystem: MSYS2's virtual
+    # temporary directory is not reliably shared with the Windows Plum binary.
+    with tempfile.TemporaryDirectory(prefix='powerlaunch-scroll-', dir=ROOT / 'build') as folder:
         project = Path(folder) / 'project'
         project.mkdir()
         shutil.copytree(ROOT/'app/desktop',project/'desktop')
