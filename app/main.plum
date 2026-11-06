@@ -96,7 +96,7 @@ let draw_cover (path: String) (title: String) (x: Int) (y: Int) (w: Int) (h: Int
     } else {
         let loaded = ui.cover(path, x, y, w, h);
         if !loaded {
-            ui.text("Cover unavailable", x + 12, y + h / 2, HintText, ui.warning(()))
+            ui.text(if ui.cover_pending(path) { "Loading cover..." } else { "Cover unavailable" }, x + 12, y + h / 2, HintText, ui.muted(()))
         }
     }
 }
@@ -162,7 +162,9 @@ let draw_grid (s: workflow.State): workflow.State = {
             220, 365, BodyText, ui.muted(()));
         if action(next, 102, "+ Add your first game", 220, 414, 218, 44, PrimaryButton, false) { acc = flow.request(acc, AddGame); }
     };
-    for i in 0..next.visible.len() {
+    let first = Int.max(0, (Int.max(0, scroll - 8) / row_height(())) * columns(()));
+    let last = Int.min(next.visible.len(), ((scroll + ui.height(()) - 156) / row_height(()) + 1) * columns(()));
+    for i in first..last {
         let y = 164 + (i / columns(())) * row_height(()) - scroll;
         if y + row_height(()) > 156 && y < ui.height(()) - 60 {
             let x = 220 + (i % columns(())) * (card_width(()) + 24);
@@ -372,12 +374,14 @@ let draw_confirmation (s: workflow.State): workflow.State = {
     } else { s }
 }
 
-let loop (s: workflow.State): Unit =
+let loop (s: workflow.State) (loader: desktop.CoverLoader): Unit =
     if s.quit || ui.done(()) {
         let cleanup = storage.release_artwork(s.artwork, UnchangedArtwork);
+        ui.stop_cover_loader(loader);
         ui.close(())
     }
     else {
+        ui.pump_covers(loader);
         ui.begin(());
         let closed = if ui.close_requested(()) { flow.request(s, CloseLauncher) } else { s };
         let keys = keyboard(closed);
@@ -400,13 +404,13 @@ let loop (s: workflow.State): Unit =
             Err(e) => message(next, "Could not remove the temporary pasted cover: ".concat(e)),
         };
         ui.end(());
-        loop(released)
+        loop(released, loader)
     }
 
 let start (root: String): Unit = {
     let opened = storage.open(root);
     ui.init(());
-    loop(flow.initial(opened.lib, opened.store, opened.error))
+    loop(flow.initial(opened.lib, opened.store, opened.error), ui.start_cover_loader(root))
 }
 
 let desktop_main (): Unit = match platform.data_root(()) {

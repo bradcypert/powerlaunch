@@ -15,11 +15,11 @@ void pl_windows_style(void *window);
 #endif
 #include "icon_data.h"
 #include "typography.h"
+#include "covers.h"
 #define RAYGUI_IMPLEMENTATION
 #include "../vendor/raygui.h"
 
 #define FIELD_BYTES 16384
-#define TEXTURES 24
 /* One borrowed widget scratch buffer. Plum copies the result immediately;
  * records and editor state remain Plum values, not retained C buffers. */
 static char field_buffer[FIELD_BYTES];
@@ -28,15 +28,10 @@ static int activation_consumed;
 static int requested_cursor = MOUSE_CURSOR_DEFAULT;
 static int current_cursor = MOUSE_CURSOR_DEFAULT;
 static int frame;
-typedef struct { char *path; Texture2D image; unsigned int used; } Cover;
-static Cover covers[TEXTURES];
-static unsigned int clock_tick;
 static Rectangle clip_stack[8];
 static int clip_depth;
 static Texture2D logo;
 static int close_requested;
-static int peak_textures;
-static unsigned long long peak_texture_bytes;
 static int input_enabled = 1;
 
 #ifdef _WIN32
@@ -123,6 +118,7 @@ void pl_ui_begin(void) {
     if (override) scale = (float)atof(override);
     if (scale < 1) scale = 1;
     if (scale > 3) scale = 3;
+    pl_covers_begin();
     activation_consumed = 0;
     requested_cursor = MOUSE_CURSOR_DEFAULT;
     SetMouseScale(1 / scale, 1 / scale);
@@ -144,17 +140,11 @@ void pl_ui_end(void) {
     if (limit && path && frame == atoi(limit)) TakeScreenshot(path);
 }
 void pl_ui_close(void) {
-    for (int i = 0; i < TEXTURES; i++) {
-        if (covers[i].image.id) UnloadTexture(covers[i].image);
-        free(covers[i].path);
-        covers[i] = (Cover){0};
-    }
+    pl_covers_close();
     if (logo.id) UnloadTexture(logo);
     pl_font_close();
     CloseWindow();
-    if (getenv("POWERLAUNCH_MEMORY_REPORT"))
-        fprintf(stderr, "[powerlaunch-native] peak_textures=%d peak_texture_bytes=%llu textures_after_close=0\n",
-            peak_textures, peak_texture_bytes);
+
 }
 long long pl_ui_width(void) { return (long long)(GetScreenWidth() / scale); }
 long long pl_ui_height(void) { return (long long)(GetScreenHeight() / scale); }
@@ -249,47 +239,5 @@ void pl_ui_unclip(void) {
     }
 }
 int pl_ui_cover(const char *path, long long x, long long y, long long w, long long h) {
-    if (!*path) return 0;
-    clock_tick++;
-    int slot = -1;
-    for (int i = 0; i < TEXTURES; i++) {
-        if (covers[i].path && strcmp(covers[i].path, path) == 0) { slot = i; break; }
-    }
-    if (slot < 0) {
-        slot = 0;
-        for (int i = 0; i < TEXTURES; i++) {
-            if (!covers[i].path) { slot = i; break; }
-            if (covers[i].used < covers[slot].used) slot = i;
-        }
-        free(covers[slot].path);
-        if (covers[slot].image.id) UnloadTexture(covers[slot].image);
-        covers[slot].image = (Texture2D){0};
-        covers[slot].path = strdup(path);
-        Image image = LoadImage(path);
-        if (image.data) {
-            float shrink = (float)image.width / 480;
-            if ((float)image.height / 720 > shrink) shrink = (float)image.height / 720;
-            if (shrink > 1) ImageResize(&image, (int)(image.width / shrink), (int)(image.height / shrink));
-            covers[slot].image = LoadTextureFromImage(image);
-            UnloadImage(image);
-            SetTextureFilter(covers[slot].image, TEXTURE_FILTER_BILINEAR);
-        }
-    }
-    covers[slot].used = clock_tick;
-    Texture2D texture = covers[slot].image;
-    if (!texture.id) return 0;
-    int count = 0;
-    unsigned long long bytes = 0;
-    for (int i = 0; i < TEXTURES; i++) if (covers[i].image.id) {
-        count++;
-        bytes += (unsigned long long)covers[i].image.width * covers[i].image.height * 4;
-    }
-    if (count > peak_textures) peak_textures = count;
-    if (bytes > peak_texture_bytes) peak_texture_bytes = bytes;
-    float fit = (float)w / texture.width;
-    if ((float)h / texture.height < fit) fit = (float)h / texture.height;
-    Rectangle destination = {(float)x + ((float)w - texture.width * fit) / 2,
-        (float)y + ((float)h - texture.height * fit) / 2, texture.width * fit, texture.height * fit};
-    DrawTexturePro(texture, (Rectangle){0, 0, (float)texture.width, (float)texture.height}, destination, (Vector2){0, 0}, 0, WHITE);
-    return 1;
+    return pl_covers_draw(path, x, y, w, h, scale);
 }

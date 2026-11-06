@@ -1,0 +1,108 @@
+use Os;
+use Crypto;
+
+extern "C" {
+    fn pl_cover_next() -> CStr;
+    fn pl_cover_in_flight_id() -> Int;
+    fn pl_cover_request_width() -> Int;
+    fn pl_cover_request_height() -> Int;
+    fn pl_cover_decode(path: CStr) -> Int;
+    fn pl_cover_image_free(image: Int);
+    fn pl_cover_encode(image: Int) -> Int;
+    fn pl_cover_encoded_data(image: Int) -> CStr;
+    fn pl_cover_resize(image: Int, width: Int, height: Int);
+    fn pl_cover_accept(id: Int, image: Int);
+    fn pl_cover_pending(path: CStr) -> Bool;
+}
+handle CoverImage { on_drop: pl_cover_image_free }
+struct CoverRequest { path: String, width: Int, height: Int }
+pub struct CoverLoader { requests: Sender[Option[CoverRequest]], replies: Receiver[CoverImage], task: Task[Unit] }
+
+let decode (path: String): Option[CoverImage] = unsafe {
+    let raw = pl_cover_decode(path.as_cstr());
+    if raw == 0 { None } else { Some(CoverImage.from_raw(raw)) }
+}
+
+let thumbnail_key (path: String): String = Crypto.sha256(path.as_bytes()).to_hex()
+let stamp (path: String): String = match Os.stat(path) {
+    Ok(info) => info.size.to_string().concat(":").concat(info.mtime.to_string()),
+    Err(_) => "missing",
+}
+
+let load_cover (path: String) (directory: String): Option[CoverImage] = {
+    let key = directory.concat("/").concat(thumbnail_key(path));
+    let version = stamp(path);
+    let cached = if version != "missing" && Os.read_file(key.concat(".stamp")) == Ok(version) {
+        decode(key.concat(".png"))
+    } else { None };
+    match cached {
+        Some(image) => Some(image),
+        None => match decode(path) {
+            None => None,
+            Some(image) => {
+                // The disk cache is disposable; write failures do not lose covers.
+                let length = unsafe { pl_cover_encode(CoverImage.raw(image)) };
+                if length > 0 {
+                    let png = unsafe { Bytes.from_cstr(pl_cover_encoded_data(CoverImage.raw(image)), length) };
+                    let written = Os.write_bytes(key.concat(".png"), png);
+                    if written.is_ok() { let saved = Os.write_file(key.concat(".stamp"), version); };
+                };
+                Some(image)
+            },
+        },
+    }
+}
+
+let cover_worker (requests: Receiver[Option[CoverRequest]]) (replies: Sender[CoverImage]) (directory: String): Unit =
+    match requests.recv() {
+        Some(Some(request)) => {
+            let image = load_cover(request.path, directory);
+            match image { Some(value) => unsafe { pl_cover_resize(CoverImage.raw(value), request.width, request.height) }, None => () };
+            // A null handle reports decode failure without transferring a bare pointer.
+            // Plum 0.0.41 cannot link a channel of a struct containing this handle.
+            let result = image.unwrap_or_else(|| unsafe { CoverImage.from_raw(0) });
+            let sent = replies.send(result);
+            cover_worker(requests, replies, directory)
+        },
+        _ => (),
+    }
+
+pub let start_cover_loader (root: String): CoverLoader = {
+    let directory = root.concat("/thumbnails-v1");
+    let (send_requests, requests) = channel[Option[CoverRequest]]();
+    let (replies, receive_replies) = channel[CoverImage]();
+    let task = spawn {
+        if !Os.exists(directory).unwrap_or(false) { let made = Os.make_dir(directory); };
+        cover_worker(requests, replies, directory)
+    };
+    CoverLoader { requests: send_requests, replies: receive_replies, task: task }
+}
+
+// At most one outstanding image: channels cannot accumulate unbounded buffers.
+// Select/else is nonblocking. GPU upload stays on the main thread, once per pump.
+pub let pump_covers (loader: CoverLoader): Unit = {
+    let ready = select { reply = loader.replies => reply, else => None };
+    match ready {
+        Some(image) => unsafe { pl_cover_accept(pl_cover_in_flight_id(), CoverImage.raw(image)) },
+        None => (),
+    };
+    let path = unsafe { pl_cover_next().as_string() };
+    if path != "" {
+        let request = unsafe { CoverRequest { path: path,
+            width: pl_cover_request_width(), height: pl_cover_request_height() } };
+        let sent = loader.requests.send(Some(request));
+    }
+}
+
+pub let stop_cover_loader (loader: CoverLoader): Unit = {
+    let sent = loader.requests.send(None);
+    loader.task.join();
+    // Release any completed CPU image before reporting resource cleanup.
+    let remaining = select { reply = loader.replies => reply, else => None };
+}
+pub let cover_pending (path: String): Bool = unsafe { pl_cover_pending(path.as_cstr()) }
+
+pub let test_thumbnail_key_uses_full_source_path (): Unit = {
+    assert(thumbnail_key("/one/cover.png") != thumbnail_key("/two/cover.png"));
+    assert_eq(thumbnail_key("/one/cover.png").char_len(), 64)
+}

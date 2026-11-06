@@ -1,0 +1,27 @@
+// Copied into desktop for integration testing the production private worker.
+extern "C" { fn pl_covers_close(); }
+pub let check_cover_worker (): Unit = {
+    let root = Os.env_var("POWERLAUNCH_SCROLL_FIXTURES").unwrap_or("");
+    let path = root.concat("/cover.png");
+    let loader = start_cover_loader(root);
+    for i in 0..50 {
+        let sent = loader.requests.send(Some(CoverRequest { path: path, width: 192, height: 288 }));
+        let reply = loader.replies.recv().unwrap_or_else(|| unsafe { CoverImage.from_raw(0) });
+        assert(unsafe { CoverImage.raw(reply) } != 0);
+    };
+    let key = root.concat("/thumbnails-v1/").concat(thumbnail_key(path));
+    assert(Os.exists(key.concat(".png")).unwrap_or(false));
+    // Recover from both a corrupt thumbnail and a stale source stamp.
+    let damaged = Os.write_file(key.concat(".png"), "broken");
+    assert(load_cover(path, root.concat("/thumbnails-v1")).is_some());
+    let outdated = Os.write_file(key.concat(".stamp"), "stale");
+    assert(load_cover(path, root.concat("/thumbnails-v1")).is_some());
+    assert(load_cover(path, root.concat("/absent/cache")).is_some());
+    let sent = loader.requests.send(Some(CoverRequest { path: root.concat("/missing.png"), width: 192, height: 288 }));
+    let failed = loader.replies.recv().unwrap_or_else(|| unsafe { CoverImage.from_raw(0) });
+    assert(unsafe { CoverImage.raw(failed) } == 0);
+    // Stop with an outstanding request to exercise drain/join ownership.
+    let sent = loader.requests.send(Some(CoverRequest { path: path, width: 192, height: 288 }));
+    stop_cover_loader(loader);
+    unsafe { pl_covers_close() }
+}

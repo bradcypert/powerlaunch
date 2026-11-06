@@ -1,0 +1,7 @@
+extern "C" { fn free(value: Int); }
+pub handle Image { on_drop: free }
+pub struct Reply { id: Int, image: Option[Image] }
+let main (): Unit = {
+    let (sender, receiver) = channel[Reply]();
+    let reply = select { value = receiver => value, else => None };
+}

@@ -105,7 +105,7 @@ remain outstanding.
   existing values remain unchanged rather than being truncated.
 - Fully responsive layouts at large scaling and further missing-target/shortcut
   edge cases on real Windows machines.
-- Persistent disk thumbnails, shared artwork
+- Thumbnail disk-cache pruning, shared artwork
   reference tracking, and orphan cleanup. Current imports keep old artwork to
   avoid deleting data still needed after a failed save; removal retains covers.
 - Full backup/restore with artwork, automatic pre-restore backup, schema
@@ -171,3 +171,28 @@ remain outstanding.
   the native clipboard ownership fixture and the actual Plum handle-to-Bytes
   copy-out path without a graphics driver. Actual Windows desktop/browser clipboard
   checks and broader formats remain useful follow-up coverage.
+
+## Cover scrolling
+
+- Visible grid rows alone are traversed. Cover misses show a loading placeholder;
+  original decoding, thumbnail encoding and resizing run in one Plum task using
+  channels and an owning native-image handle. At most one request is outstanding,
+  stale viewport responses are discarded, and GPU uploads happen once per pump
+  on the graphics thread.
+- Disposable `thumbnails-v1/` PNGs use SHA-256 source-path keys and size/mtime
+  stamps. Corrupt or stale thumbnails regenerate; cache write failures fall back
+  to original artwork. Automatic disk pruning remains outstanding.
+- GPU textures use draw-size/DPI tiers, at most 128 textures and 64 MiB of tracked
+  RGBA bytes. Metadata is also bounded (256 entries). A smaller 4–64 MiB budget
+  can be selected with `POWERLAUNCH_TEXTURE_BUDGET_MB` for diagnostics.
+- A 40-cover, 1200×1800 synthetic PNG benchmark reproduced a ~65 ms cover-work
+  p95 before the fix, dropping to ~0.13 ms with the async pipeline under a forced
+  4 MiB eviction budget. This excludes the rest of the frame and does not predict
+  Windows hardware performance; see `MEMORY.md` for the workload and limits.
+- Sixteen Plum tests, process/clipboard integration, real-input UI/clipboard
+  checks, and the new graphics-free worker ownership test pass locally. ASan/LSan
+  covers repeated channel/handle transfers, failed decoding, cache recovery and
+  shutdown with a pending reply. The graphical benchmark also passes ASan.
+- A minimized Plum 0.0.41 generated-helper/link failure with a channel reply
+  containing an owned handle is recorded under `plum-repros/channel-owned-handle`.
+  No new upstream issue has been filed for it.

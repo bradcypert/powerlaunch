@@ -120,3 +120,49 @@ the UI retains only the staged file and its bounded cached preview texture.
 Captures above 16 megapixels or 64 MiB encoded PNG are rejected. The backend may
 allocate decoded image memory before the dimension check; these are accepted
 image limits, not a promise about peak process memory for arbitrary clipboard data.
+
+## Async covers and scrolling (2026-11-05)
+
+The previous 24-texture cache decoded/resized originals during drawing after
+an eviction. A native reproduction with ten visible covers and 40 distinct
+1200×1800 PNGs measured 64.86 ms p95 cover work; 24 covers measured 0.009 ms,
+25 measured 67.94 ms. Forty already-sized 480×720 sources took 2.48 ms with the
+same upload dimensions, isolating source decode/resize as the main bottleneck.
+
+The new benchmark exercises the actual Plum task/channel/handle and native
+texture path. It waits for cold covers, sweeps rows twice, rapidly changes the
+viewport, then revisits it. With a deliberately restricted 4 MiB budget it
+measured 0.134 ms p95, 0.617 ms max, and 0.154 ms warmed p95. It uploaded 85
+textures across 40 covers, discarded two obsolete responses, and stayed under
+4 MiB (24 textures / 4,177,920 tracked bytes). Peak process RSS was
+137,404,416 bytes (131.0 MiB) on Linux/Xvfb/software OpenGL. The old native
+microbenchmark and new full Plum pipeline are different harnesses; these are
+cover-work measurements, excluding UI layout/text and EndDrawing/presentation.
+Synthetic PNGs also cannot represent every image format or GPU.
+
+```
+xvfb-run -a -s '-screen 0 1600x1000x24' mise exec -- python3 tests/scroll_performance.py
+xvfb-run -a -s '-screen 0 1600x1000x24' mise exec -- python3 tests/scroll_performance.py --sanitize --report build/scroll-asan.json
+```
+
+The graphical ASan run measured 0.250 ms p95 / 4.821 ms max, with no invalid
+access findings. Its ~464 MiB RSS includes sanitizer overhead. Leak detection is
+disabled for this graphics-driver run; the separate graphics-free worker test
+runs with ASan **and LSan** through `mise run memory-check`. That test sends 50
+images through the actual production worker and owned handles, regenerates
+corrupt/stale cache entries, handles missing files, and joins/drains an outstanding
+request at shutdown. Both it and the graphical run report zero live decoded
+images and zero textures after close.
+
+Four real-input scroll/detail/edit/back cycles over 2,000 games / 40 smaller
+320×480 covers peaked at 125,919,232 bytes RSS. After warmup, RSS/anonymous RSS
+grew 159,744 bytes, and resident-private pages grew 1,978,368 bytes. All 40
+textures fit (9,019,392 tracked bytes); all were released. This short run is
+regression evidence, not proof of leak freedom or of all Plum memory guarantees.
+
+Production uses at most 128 GPU textures / 64 MiB tracked RGBA pixels, with
+256 path/metadata entries and one outstanding image job. Decoding can allocate
+source pixels before the 16-megapixel acceptance check. The disposable disk
+cache has no automatic pruning yet. These limits do not bound total process,
+compressed source, driver, or disk memory. Windows CI exercises the headless
+worker and packaged app; real Windows scrolling remains a manual follow-up.
