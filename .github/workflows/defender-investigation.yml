@@ -1,0 +1,65 @@
+name: Defender artifact investigation
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/defender-investigation.yml
+      - scripts/fetch_scan_artifact.py
+      - scripts/scan_defender.ps1
+  workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Existing powerlaunch-windows-x64 artifact ID
+        required: true
+        default: '13387336305'
+      run_id:
+        description: Workflow run that produced the artifact
+        required: true
+        default: '41964545729'
+      expected_exe_sha256:
+        description: Executable SHA-256 from that build's recorded memory profile
+        required: true
+        default: d0aa642f1d6ad0af0eec15891dac892ecb26cdd4de78736b4beb739a1d9b8eb9
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  scan:
+    name: Scan existing Windows artifact without executing it
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      # PR runs reproduce the specific maintainer-reported artifact. Manual runs
+      # may select another existing artifact; no application is rebuilt here.
+      SCAN_ARTIFACT_ID: ${{ inputs.artifact_id || '13387336305' }}
+      SCAN_RUN_ID: ${{ inputs.run_id || '41964545729' }}
+      SCAN_EXE_SHA256: ${{ inputs.expected_exe_sha256 || 'd0aa642f1d6ad0af0eec15891dac892ecb26cdd4de78736b4beb739a1d9b8eb9' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Defender and update signatures
+        shell: pwsh
+        run: ./scripts/scan_defender.ps1 -PrepareOnly
+      - name: Fetch exact archived package and verify its hashes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/fetch_scan_artifact.py
+          --artifact-id $env:SCAN_ARTIFACT_ID
+          --run-id $env:SCAN_RUN_ID
+          --expected-exe-sha256 $env:SCAN_EXE_SHA256
+      - name: Scan package (never launch it)
+        shell: pwsh
+        run: ./scripts/scan_defender.ps1
+      - name: Retain scan evidence only (no executable upload)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: defender-investigation
+          path: build/defender-investigation/reports/
+          if-no-files-found: error
+          retention-days: 30
