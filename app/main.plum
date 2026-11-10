@@ -89,9 +89,10 @@ let cover_path (s: workflow.State): String =
 let draw_cover (path: String) (title: String) (x: Int) (y: Int) (w: Int) (h: Int): Unit = {
     ui.round_rect(x, y, w, h, ui.surface(()));
     if path == "" {
-        ui.logo(x + (w - 54) / 2, y + h / 3 - 20, 54);
-        ui.clip(x + 16, y + h / 2, w - 32, h / 2 - 12);
-        let lines = ui.paragraph(title, x + 16, y + h / 2, w - 32, CoverTitle, ui.ink(()));
+        let title_y = if w > h { y + 16 } else { y + h / 2 };
+        if w <= h { ui.logo(x + (w - 54) / 2, y + h / 3 - 20, 54); };
+        ui.clip(x + 16, title_y, w - 32, y + h - title_y - 12);
+        let lines = ui.paragraph(title, x + 16, title_y, w - 32, CoverTitle, ui.ink(()));
         ui.unclip(())
     } else {
         let loaded = ui.cover(path, x, y, w, h);
@@ -103,7 +104,8 @@ let draw_cover (path: String) (title: String) (x: Int) (y: Int) (w: Int) (h: Int
 
 let columns (): Int = Int.max(1, (ui.width(()) - 252) / 190)
 let card_width (): Int = ((ui.width(()) - 252) - (columns(()) - 1) * 24) / columns(())
-let row_height (): Int = card_width(()) * 3 / 2 + 72
+let card_cover_height (): Int = card_width(()) * 9 / 16
+let row_height (): Int = card_cover_height(()) + 72
 
 let menu_items (s: workflow.State): Array[String] =
     if s.dropdown == 1 { Array.concat(["All tags"], s.tags) }
@@ -170,13 +172,13 @@ let draw_grid (s: workflow.State): workflow.State = {
             let x = 220 + (i % columns(())) * (card_width(()) + 24);
             let game = next.visible[i];
             let path = storage.cover_path(s.store, game.cover);
-            draw_cover(path, game.title, x, y, card_width(()), card_width(()) * 3 / 2);
-            if ui.hover(x, y, card_width(()), card_width(()) * 3 / 2) || (s.focus == 300 && s.selected == i) {
-                ui.outline(x - 3, y - 3, card_width(()) + 6, card_width(()) * 3 / 2 + 6, ui.accent(()))
+            draw_cover(path, game.title, x, y, card_width(()), card_cover_height(()));
+            if ui.hover(x, y, card_width(()), card_cover_height(())) || (s.focus == 300 && s.selected == i) {
+                ui.outline(x - 3, y - 3, card_width(()) + 6, card_cover_height(()) + 6, ui.accent(()))
             };
-            ui.clip(x, y + card_width(()) * 3 / 2 + 12, card_width(()), 48);
-            ui.text(game.title, x, y + card_width(()) * 3 / 2 + 12, BodyText, ui.ink(()));
-            ui.text(if game.favorite { "Favorite" } else { game.developer }, x, y + card_width(()) * 3 / 2 + 38, Caption, ui.muted(()));
+            ui.clip(x, y + card_cover_height(()) + 12, card_width(()), 48);
+            ui.text(game.title, x, y + card_cover_height(()) + 12, BodyText, ui.ink(()));
+            ui.text(if game.favorite { "Favorite" } else { game.developer }, x, y + card_cover_height(()) + 38, Caption, ui.muted(()));
             ui.unclip(());
             if ui.interactive(x, y, card_width(()), row_height(()) - 14) && ui.released(()) {
                 acc = open_game(acc, game);
