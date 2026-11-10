@@ -20,7 +20,7 @@ release platform; preserve a path to Linux and macOS.
    tags, and favorite status. Only title and launch target are required.
 4. Copy chosen artwork into managed storage. Moving the source image must not
    break the library. Show a title-based placeholder when artwork is absent.
-5. Provide a dark portrait-cover grid, title search, sorting, favorites, tag
+5. Provide a dark landscape-cover grid (16:9 artwork slots), title search, sorting, favorites, tag
    filters, and a detail view with Play and Edit. Use mouse and keyboard controls,
    visible focus, readable text, scrolling, and display scaling.
 6. Keep the launcher responsive and open when a game starts. Games must survive

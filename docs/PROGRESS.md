@@ -196,3 +196,12 @@ remain outstanding.
 - A minimized Plum 0.0.41 generated-helper/link failure with a channel reply
   containing an owned handle is recorded under `plum-repros/channel-owned-handle`.
   No new upstream issue has been filed for it.
+
+## Landscape library grid
+
+- Grid artwork slots use 16:9 proportions for monitor-shaped cover images.
+  Images retain their aspect ratio and full contents; portrait images fit inside
+  the wider slot. Titles, focus outlines, pointer hit areas, row culling and
+  keyboard scrolling share the shorter cover/row geometry.
+- Missing-cover cards use a compact title placeholder without overlapping a logo.
+  Detail and editor previews keep their existing portrait layout.
