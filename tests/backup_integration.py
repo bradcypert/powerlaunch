@@ -14,18 +14,21 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from build import PLUM, environment
 from profile_memory import process_memory, seed_library
 
+cover_mib = int(os.environ.get('POWERLAUNCH_BACKUP_LARGE_MIB', '2'))
+assert 1 <= cover_mib <= 256
 (ROOT / 'build').mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='powerlaunch-backup-', dir=ROOT / 'build') as folder:
     directory = Path(folder)
     project = directory / 'project'
     shutil.copytree(ROOT / 'app', project)
     shutil.copy2(ROOT / 'tests/backup_fixture.plum', project / 'backup/check.plum')
-    (project / 'main.plum').write_text('use backup;\nlet main (): Unit = backup.check_backup_fixture(())\n')
+    entry = 'check_backup_large_fixture' if cover_mib > 2 else 'check_backup_fixture'
+    (project / 'main.plum').write_text(f'use backup;\nlet main (): Unit = backup.{entry}(())\n')
     data = directory / 'Café library'
     data.mkdir()
     seed_library(data, 3)
     (data / 'artwork').mkdir()
-    covers = {'Café cover.png': bytes(range(256)) * 8192, 'other.jpg': b'\x00\xff\x80cover bytes'}
+    covers = {'Café cover.png': bytes(range(256)) * (4096 * cover_mib), 'other.jpg': b'\x00\xff\x80cover bytes'}
     for name, content in covers.items():
         (data / 'artwork' / name).write_bytes(content)
     (data / 'artwork/orphan.png').write_bytes(b'excluded orphan')
@@ -82,6 +85,8 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-backup-', dir=ROOT / 'build
         assert json.loads(archive.read('library.json'))['games'] == []
     report = {'seconds': round(time.monotonic() - start, 3), 'peak_rss_bytes': max((s['rss_bytes'] for s in samples), default=0),
               'source_cover_bytes': sum(map(len, covers.values())), 'sanitized': env.get('POWERLAUNCH_SANITIZE') == '1',
-              'note': 'Repeated 2 MiB cover export/failure fixture; process RSS includes runtime/native libraries and sanitizer overhead when enabled.'}
+              'note': f'{cover_mib} MiB cover export fixture; process RSS includes runtime/native libraries and sanitizer overhead when enabled.'}
+    if cover_mib >= 64 and sys.platform == 'linux' and not report['sanitized']:
+        assert report['peak_rss_bytes'] < 32 * 1024 * 1024, report
     (ROOT / 'build/backup-memory.json').write_text(json.dumps(report, indent=2) + '\n')
     print('Independent Python ZIP/read/extract validation passed.', json.dumps(report))

@@ -89,7 +89,8 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-backup-ui-') as folder:
             if app.poll() is None:
                 app.terminate()
                 app.wait(timeout=5)
-    (ROOT / 'build/backup-ui-memory.json').write_text(json.dumps({"samples": samples,
+    (ROOT / 'build/backup-ui-memory.json').write_text(json.dumps({"samples": samples, "executable": str(os.environ.get("POWERLAUNCH_TEST_EXE", ROOT / "build/powerlaunch")),
+        "sanitized": "asan" in str(os.environ.get("POWERLAUNCH_TEST_EXE", "")),
         "note": "OS checkpoints during a 5-game/3-cover UI export; these are not continuous peaks or proof of leak freedom."}, indent=2) + '\n')
     text = (ROOT / 'build/backup-ui.log').read_text()
     assert 'images_after_close=0' in text and 'textures_after_close=0' in text

@@ -98,6 +98,8 @@ within the normal application workflow; size changes during copying are rejected
 ## Verification
 
 `mise run test` runs the Plum format checks and standalone backup integration.
+A separate 64 MiB streaming fixture is enabled with `POWERLAUNCH_BACKUP_LARGE_MIB=64`;
+Linux CI checks its normal-process RSS against a 32 MiB regression budget.
 The integration independently opens/checks/extracts the output with Python's ZIP
 reader, compares all metadata/artwork bytes, and verifies exclusions/deduplication.
 It covers Unicode/spaced paths, empty libraries, missing/changed covers, cancelled

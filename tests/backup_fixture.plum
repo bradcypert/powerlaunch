@@ -122,3 +122,14 @@ let await_ready_then_change (job: Job) (path: String): Progress = match job.even
         await_ready_then_change(job, path)
     },
 }
+
+pub let check_backup_large_fixture (): Unit = {
+    let root = Os.env_var("POWERLAUNCH_BACKUP_FIXTURE").unwrap_or("").concat("/Café library");
+    let lib = library.load(root.concat("/library.json")).unwrap_or(library.empty(()));
+    assert_eq(lib.games.len(), 3);
+    assert_eq(drive(root, lib, "Café backup.zip", Idle, 0, -1, false, false).stage, Completed);
+    assert_eq(drive(root, library.empty(()), "empty.zip", Idle, 0, -1, false, false).stage, Completed);
+    assert_eq(unsafe { pl_reader_live() }, 0);
+    no_staging(root);
+    println("Large streaming export passed.")
+}

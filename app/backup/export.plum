@@ -45,21 +45,27 @@ let manifest (games: Int) (covers: Int): Result[String, String] = json_stringify
     JsonEntry { key: "excluded", value: JsonArray(Array.map(["game installations", "game saves", "thumbnails", "temporary drafts"], |s| JsonString(s))) },
 ]))
 let inline_input (name: String) (text: String): Input = Input { name: name, path: "", data: text.as_bytes(), size: text.as_bytes().len() }
-let plan_covers (root: String) (names: Array[String]) (index: Int) (inputs: Array[Input]) (c: Control): Result[Array[Input], String] =
-    if index == names.len() { Ok(inputs) }
-    else {
-        let name = names[index];
-        let path = root.concat("/artwork/").concat(name);
-        Result.and_then(checkpoint(c, Checking, name), |ignored|
-            Result.and_then(Os.stat(path), |info|
-                if info.is_directory { Err("Expected a cover file: ".concat(name)) }
-                else if info.size < 0 || info.size >= 4294967295 { Err("Cover is too large for this backup format: ".concat(name)) }
-                else {
-                    c.done.set(index + 1);
-                    plan_covers(root, names, index + 1, inputs.push(Input {
-                        name: "artwork/".concat(name), path: path, data: Bytes.empty(()), size: info.size }), c)
-                }))
-    }
+let plan_covers (root: String) (names: Array[String]) (index: Int) (inputs: Array[Input]) (c: Control): Result[Array[Input], String] = {
+    let planned = inputs;
+    let error = "";
+    for i in index..names.len() {
+        if error == "" {
+            let name = names[i];
+            let path = root.concat("/artwork/").concat(name);
+            let inspected = Result.and_then(checkpoint(c, Checking, name), |ignored| Os.stat(path));
+            match inspected {
+                Err(e) => { error = e; },
+                Ok(info) => if info.is_directory { error = "Expected a cover file: ".concat(name); }
+                    else if info.size < 0 || info.size >= 4294967295 { error = "Cover is too large for this backup format: ".concat(name); }
+                    else {
+                        c.done.set(i + 1);
+                        planned = planned.push(Input { name: "artwork/".concat(name), path: path, data: Bytes.empty(()), size: info.size });
+                    },
+            };
+        };
+    };
+    if error == "" { Ok(planned) } else { Err(error) }
+}
 let build_plan (root: String) (lib: library.Library) (names: Array[String]) (c: Control): Result[Array[Input], String] =
     Result.and_then(library.encode(lib), |json|
         Result.and_then(library.decode(json), |validated|

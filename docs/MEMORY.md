@@ -173,7 +173,7 @@ The backup fixture repeatedly exports/verifies a 2 MiB binary cover plus a small
 second cover and three records, with shared-reference deduplication. It includes
 empty export, controller polling/confirmation, cancellation in each phase, queued
 review cancellation, injected output failure, corrupt output, missing/changed
-sources, a publication race and close/join. The final unsanitized run completed
+sources, a publication race and close/join. The initial full-failure unsanitized run completed
 in 1.074 seconds with a sampled 9,101,312-byte peak RSS (~8.7 MiB). This is the
 headless exporter process, not the graphical application or a large-library bound.
 Metadata/entry records remain resident; source/artifact payload reads use 64 KiB
@@ -192,3 +192,16 @@ and window close while a worker waits at review; optional OS checkpoints are
 saved to `build/backup-ui-memory.json`. Those points are not continuous peaks or
 proof of leak freedom. Format constraints and crash/cancellation limits are in
 `BACKUP.md`; minimized runtime/compiler findings are in `PLUM-CANDIDATES.md`.
+
+A separate 64 MiB single-export workload caught application-level retention in
+recursive Result callbacks: prior chunks stayed alive until each file finished.
+That run peaked at 72,957,952 bytes RSS (~69.6 MiB). Replacing payload, verification
+and entry traversal recursion with loops reduced the same workload to
+4,612,096 bytes (~4.4 MiB), with independent ZIP/extraction validation still
+passing in 4.1 seconds. This was object lifetime across callbacks, not an
+unreachable-allocation leak. Linux CI now runs this large fixture normally and
+requires sampled RSS below a conservative 32 MiB regression threshold. Metadata
+size and platform/runtime differences still affect total memory.
+
+Run it with `POWERLAUNCH_BACKUP_LARGE_MIB=64 mise exec -- python3 tests/backup_integration.py`.
+ASan/LSan continues to cover the smaller complete fault matrix separately.
