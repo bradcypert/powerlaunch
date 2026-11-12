@@ -1,0 +1,18 @@
+use Os;
+let read_once (path: String): Unit = match Os.open(path, Read) {
+    Err(e) => { println(e); assert(false); },
+    Ok(file) => {
+        assert_eq(file.read(65536).unwrap_or(Bytes.empty(())).len(), 6);
+        assert(file.close().is_ok());
+    },
+}
+let main (): Unit = {
+    let root = Os.temp_dir(()).unwrap_or("");
+    let path = root.concat("/sample.txt");
+    assert(Os.write_file(path, "sample").is_ok());
+    for i in 0..3 {
+        if Os.env_var("POWERLAUNCH_REPRO_MAIN_THREAD").is_some() { read_once(path); }
+        else { let task = spawn { read_once(path) }; task.join(); };
+    };
+    assert(Os.remove_tree(root).is_ok())
+}

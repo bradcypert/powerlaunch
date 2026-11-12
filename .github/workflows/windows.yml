@@ -97,6 +97,8 @@ jobs:
             build/windows-smoke.png
             build/windows-memory.json
             build/windows-memory.log
+            build/backup-integration.log
+            build/backup-memory.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -132,6 +134,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plum-memory-diagnostics
-          path: build/memory-sanitizer.log
+          path: |
+            build/memory-sanitizer.log
+            build/backup-integration.log
+            build/backup-memory.json
           if-no-files-found: ignore
           retention-days: 30

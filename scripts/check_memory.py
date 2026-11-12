@@ -23,6 +23,9 @@ with log.open("w", encoding="utf-8") as stream:
     if result.returncode == 0:
         result = subprocess.run([sys.executable, "tests/cover_worker.py"], cwd=ROOT,
             env=env, stdout=stream, stderr=subprocess.STDOUT)
+    if result.returncode == 0:
+        result = subprocess.run([sys.executable, "tests/backup_integration.py"], cwd=ROOT,
+            env=env, stdout=stream, stderr=subprocess.STDOUT)
 print(log.read_text(encoding="utf-8", errors="replace"))
 if result.returncode:
     raise SystemExit(result.returncode)

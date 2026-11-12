@@ -3,8 +3,8 @@ use storage;
 
 // A confirmation owns its destination and always renders the editor beneath it.
 // There is no separate pending flag that can disagree with the active screen.
-pub enum Destination { CloseLauncher, ShowLibrary, AddGame, CancelEditor }
-pub enum Screen { LibraryScreen, DetailsScreen, EditorScreen, ConfirmScreen(Destination) }
+pub enum Destination { CloseLauncher, ShowLibrary, AddGame, CancelEditor, ShowBackup }
+pub enum Screen { LibraryScreen, DetailsScreen, EditorScreen, BackupScreen, ConfirmScreen(Destination) }
 
 pub struct State {
     pub lib: library.Library,
@@ -61,6 +61,7 @@ let navigate (s: State) (destination: Destination): State = {
         CloseLauncher => State { quit: true, ..clean },
         AddGame => new_game(clean),
         CancelEditor => State { screen: if clean.draft.id == "" { LibraryScreen } else { DetailsScreen }, focus: 200, ..clean },
+        ShowBackup => State { screen: BackupScreen, focus: 404, ..clean },
         ShowLibrary => State { screen: LibraryScreen, focus: 300, ..clean },
     }
 }
@@ -99,7 +100,7 @@ pub let test_unsaved_navigation_is_explicit_and_cancelable (): Unit = {
     let base = initial(library.empty(()), storage.Store { root: "unused", writable: true }, "");
     let editor = request(base, AddGame);
     let changed = State { draft: library.Game { title: "Unsaved", ..editor.draft }, ..editor };
-    for destination in [CloseLauncher, ShowLibrary, AddGame, CancelEditor] {
+    for destination in [CloseLauncher, ShowLibrary, AddGame, CancelEditor, ShowBackup] {
         let confirmation = request(changed, destination);
         assert_eq(confirmation.screen, ConfirmScreen(destination));
         assert(!confirmation.quit);
@@ -108,6 +109,7 @@ pub let test_unsaved_navigation_is_explicit_and_cancelable (): Unit = {
     };
     assert(discard(request(changed, CloseLauncher)).quit);
     assert_eq(discard(request(changed, ShowLibrary)).screen, LibraryScreen);
+    assert_eq(discard(request(changed, ShowBackup)).screen, BackupScreen);
     assert_eq(discard(request(changed, AddGame)).draft, library.draft(()))
 }
 

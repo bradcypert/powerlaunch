@@ -6,6 +6,8 @@ extern "C" {
     fn pl_process_free(handle: Int);
     fn pl_process_start(handle: Int, directory: CStr) -> CStr;
     fn pl_pick_file(kind: Int) -> CStr;
+    fn pl_pick_backup() -> CStr;
+    fn pl_publish_new(source: CStr, destination: CStr) -> Int;
     fn pl_unique_token() -> CStr;
     fn pl_write_new(path: CStr, bytes: CStr, length: Int) -> Int;
 }
@@ -128,3 +130,13 @@ pub let write_new (path: String) (bytes: Bytes): Result[Bool, String] = unsafe {
 }
 
 pub let unique_token (): String = unsafe { pl_unique_token().as_string() }
+
+
+pub let pick_backup (): String = unsafe { pl_pick_backup().as_string() }
+pub let publish_new (source: String) (destination: String): Result[Unit, String] = unsafe {
+    match pl_publish_new(source.as_cstr(), destination.as_cstr()) {
+        0 => Ok(()),
+        1 => Err("Destination already exists. Choose a new backup filename."),
+        _ => Err("Could not publish backup. Check the destination folder and free disk space."),
+    }
+}
