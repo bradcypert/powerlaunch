@@ -1,0 +1,135 @@
+use Time;
+extern "C" { fn pl_reader_live() -> Int; }
+// This file is copied into backup/ only in the standalone integration project.
+let drive_job (job: Job) (cancel_at: Stage) (minimum: Int) (race: String) (corrupt: Bool) (directory: String): Progress =
+    match job.events.recv() {
+        None => { assert(false); idle(()).progress },
+        Some(progress) => if progress.stage == Completed || progress.stage == Failed || progress.stage == Cancelled {
+            job.task.join(); progress
+        } else {
+            if race != "" && progress.message == "Ready to publish verified backup" {
+                assert(Os.write_file(race, "existing backup must survive").is_ok());
+            };
+            if corrupt && progress.stage == Verifying && progress.done == 0 {
+                let staging = Array.filter(Os.list_dir(directory).unwrap_or([]), |name| name.starts_with(".powerlaunch-backup-") && name.ends_with(".partial"));
+                assert_eq(staging.len(), 1);
+                assert(Os.write_file(directory.concat("/").concat(staging[0]).concat("/backup.zip"), "corrupt").is_ok());
+            };
+            let sent = job.commands.send(!(progress.stage == cancel_at && progress.done >= minimum));
+            drive_job(job, cancel_at, minimum, race, corrupt, directory)
+        },
+    }
+let drive (root: String) (lib: library.Library) (name: String) (cancel_at: Stage) (minimum: Int) (allowance: Int) (race: Bool) (corrupt: Bool): Progress = {
+    let path = root.concat("/").concat(name);
+    let session = start_config(root, lib, path, allowance);
+    match session.job {
+        None => { assert(false); session.progress },
+        Some(job) => drive_job(job, cancel_at, minimum, if race { path } else { "" }, corrupt, root),
+    }
+}
+let no_staging (root: String): Unit =
+    assert_eq(Array.filter(Os.list_dir(root).unwrap_or([]), |name| name.starts_with(".powerlaunch-backup-")).len(), 0)
+
+let drive_session (session: Session) (cancel_review: Bool) (turns: Int): Progress = {
+    assert(turns < 10000);
+    let current = pump(session);
+    if !active(current) { current.progress }
+    else {
+        let next = if current.progress.stage == Ready {
+            if cancel_review { cancel(current) } else { confirm(current) }
+        } else { current };
+        Time.sleep(Time.millis(1));
+        drive_session(next, cancel_review, turns + 1)
+    }
+}
+let test_cancel_before_ready_delivery (): Unit = {
+    let (send_commands, commands) = channel[Bool]();
+    let (events, receive_events) = channel[Progress]();
+    let initial = idle(()).progress;
+    let task = spawn {
+        let sent = events.send(Progress { stage: Ready, ..initial });
+        assert(!commands.recv().unwrap_or(true));
+        let sent = events.send(Progress { stage: Cancelled, ..initial });
+    };
+    // Cancellation was requested before the pending Ready event was pumped.
+    let pending = Session { job: Some(Job { commands: send_commands, events: receive_events, task: task }),
+        progress: Progress { stage: Checking, ..initial }, cancel_requested: true };
+    assert_eq(drive_session(pending, false, 0).stage, Cancelled)
+}
+
+pub let check_backup_fixture (): Unit = {
+    let base = Os.env_var("POWERLAUNCH_BACKUP_FIXTURE").unwrap_or("");
+    assert(base != "");
+    let root = base.concat("/Café library");
+    let source_json = match Os.read_file(root.concat("/library.json")) {
+        Ok(text) => text, Err(e) => { println(e); assert(false); "" },
+    };
+    let lib = match library.decode(source_json) {
+        Ok(value) => value, Err(e) => { println(e); assert(false); library.empty(()) },
+    };
+    assert_eq(lib.games.len(), 3);
+    assert_eq(cover_names(lib).len(), 2);
+    assert_eq(drive(root, lib, "Café backup.zip", Idle, 0, -1, false, false).stage, Completed);
+    assert_eq(drive(root, library.empty(()), "empty.zip", Idle, 0, -1, false, false).stage, Completed);
+    for stage in [Checking, Ready, Writing, Verifying] {
+        let name = if stage == Checking { "cancel-checking.zip" } else if stage == Ready { "cancel-ready.zip" }
+            else if stage == Writing { "cancel-writing.zip" } else { "cancel-verifying.zip" };
+        let result = drive(root, lib, name, stage, if stage == Writing || stage == Verifying { 1000 } else { 0 }, -1, false, false);
+        assert_eq(result.stage, Cancelled);
+        assert(!Os.exists(root.concat("/").concat(name)).unwrap_or(true));
+        no_staging(root);
+    };
+    assert_eq(drive(root, lib, "failed-write.zip", Idle, 0, 80, false, false).stage, Failed);
+    assert_eq(drive(root, lib, "corrupt.zip", Idle, 0, -1, false, true).stage, Failed);
+    assert_eq(drive(root, lib, "race.zip", Idle, 0, -1, true, false).stage, Failed);
+    assert_eq(Os.read_file(root.concat("/race.zip")).unwrap_or(""), "existing backup must survive");
+    // Existing final names must survive even before staging begins.
+    assert_eq(drive(root, lib, "Café backup.zip", Idle, 0, -1, false, false).stage, Failed);
+    let broken = library.Library { games: [library.Game { cover: "missing.png", ..lib.games[0] }], next_id: lib.next_id };
+    assert_eq(drive(root, broken, "missing.zip", Idle, 0, -1, false, false).stage, Failed);
+    let source_cover = root.concat("/artwork/").concat(lib.games[0].cover);
+    let original = Os.read_bytes(source_cover).unwrap_or(Bytes.empty(()));
+    let session = start_config(root, lib, root.concat("/changed.zip"), -1);
+    match session.job { None => assert(false), Some(job) => {
+        // Stop at the reviewed plan, then truncate a source before writing.
+        let result = await_ready_then_change(job, source_cover);
+        assert_eq(result.stage, Failed);
+    } };
+    assert(Os.write_bytes(source_cover, original).is_ok());
+    assert_eq(drive_session(start(root, lib, root.concat("/controller.zip")), false, 0).stage, Completed);
+    assert_eq(drive_session(start(root, lib, root.concat("/controller-cancel.zip")), true, 0).stage, Cancelled);
+    test_cancel_before_ready_delivery(());
+    // A closed launcher cancels/joins even if the worker is waiting at review.
+    let closing = start(root, lib, root.concat("/closing.zip"));
+    shutdown(closing);
+    assert(!Os.exists(root.concat("/closing.zip")).unwrap_or(true));
+    assert_eq(Os.read_file(root.concat("/library.json")).unwrap_or(""), source_json);
+    for name in ["failed-write.zip", "corrupt.zip", "missing.zip", "changed.zip"] {
+        assert(!Os.exists(root.concat("/").concat(name)).unwrap_or(true));
+    };
+    no_staging(root);
+    assert_eq(unsafe { pl_reader_live() }, 0);
+    println("Backup integration: export, CRC verification, empty/shared covers, cancellation, injected write failure, corruption, missing/changed covers, no-replace race and shutdown passed.")
+}
+let await_ready_then_change (job: Job) (path: String): Progress = match job.events.recv() {
+    None => { assert(false); idle(()).progress },
+    Some(progress) => if progress.stage == Ready {
+        assert(Os.write_file(path, "changed").is_ok());
+        let sent = job.commands.send(true);
+        drive_job(job, Idle, 0, "", false, "")
+    } else {
+        let sent = job.commands.send(true);
+        await_ready_then_change(job, path)
+    },
+}
+
+pub let check_backup_large_fixture (): Unit = {
+    let root = Os.env_var("POWERLAUNCH_BACKUP_FIXTURE").unwrap_or("").concat("/Café library");
+    let lib = library.load(root.concat("/library.json")).unwrap_or(library.empty(()));
+    assert_eq(lib.games.len(), 3);
+    assert_eq(drive(root, lib, "Café backup.zip", Idle, 0, -1, false, false).stage, Completed);
+    assert_eq(drive(root, library.empty(()), "empty.zip", Idle, 0, -1, false, false).stage, Completed);
+    assert_eq(unsafe { pl_reader_live() }, 0);
+    no_staging(root);
+    println("Large streaming export passed.")
+}

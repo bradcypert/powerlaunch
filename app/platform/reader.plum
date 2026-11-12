@@ -1,0 +1,23 @@
+// Owned, worker-confined read buffer until Plum's File.read task-exit cleanup
+// is fixed. OS writes/seeks still use Plum File handles; ZIP logic stays Plum.
+extern "C" {
+    fn pl_reader_open(path: CStr) -> Int;
+    fn pl_reader_read(reader: Int, count: Int) -> Int;
+    fn pl_reader_data(reader: Int) -> CStr;
+    fn pl_reader_position(reader: Int) -> Int;
+    fn pl_reader_close(reader: Int);
+}
+pub handle Reader { on_drop: pl_reader_close }
+pub let open_reader (path: String): Result[Reader, String] = unsafe {
+    let raw = pl_reader_open(path.as_cstr());
+    if raw == 0 { Err("Could not open backup input: ".concat(path)) } else { Ok(Reader.from_raw(raw)) }
+}
+pub let Reader.read (reader: Reader) (count: Int): Result[Bytes, String] = unsafe {
+    let size = pl_reader_read(Reader.raw(reader), count);
+    if size < 0 { Err("Could not read backup input.") }
+    else { Ok(Bytes.from_cstr(pl_reader_data(Reader.raw(reader)), size)) }
+}
+pub let Reader.position (reader: Reader): Result[Int, String] = unsafe {
+    let offset = pl_reader_position(Reader.raw(reader));
+    if offset < 0 { Err("Could not read archive position.") } else { Ok(offset) }
+}

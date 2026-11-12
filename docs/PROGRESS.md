@@ -205,3 +205,25 @@ remain outstanding.
   keyboard scrolling share the shorter cover/row geometry.
 - Missing-cover cards use a compact title placeholder without overlapping a logo.
   Detail and editor previews keep their existing portrait layout.
+
+## Library backup export (#9)
+
+- A dedicated backup screen reviews saved game/unique-cover counts and exclusions,
+  then starts a cancellable background Plum task. Dirty edits retain the usual
+  save/discard/keep-editing workflow; ordinary editing is disabled during export.
+- A documented version-1 ZIP snapshot contains the existing library schema and
+  deduplicated referenced artwork. Game installations, saves, caches, orphaned
+  artwork and drafts are excluded. Missing/unreadable covers fail the export.
+- Streaming stored ZIP writing, CRC computation and verification are Plum; the
+  worker uses bounded 64 KiB I/O and acknowledged progress events. Publication
+  uses a narrow no-replace native filesystem adapter after full output validation.
+- Independent Python ZIP reading/extraction and injected-failure fixtures cover
+  Unicode/spaced paths, empty/shared artwork, cancellation, corruption, changed
+  sources, destination races and shutdown. Restore/migration UI remains #10;
+  multi-instance writer protection remains #11. See `BACKUP.md` for format/limits.
+- Nineteen Plum tests and process/clipboard/cover/backup integration checks pass
+  locally. The real-input backup, existing UI and clipboard flows pass; the
+  full graphics-free ASan/LSan workload passes with the owned-reader workaround.
+- Backup validation exposed two minimized Plum 0.0.41 defects: File.read TLS
+  scratch allocations surviving task exit and struct literal field-order crashes.
+  Reproductions and bounded workarounds are recorded in `PLUM-CANDIDATES.md`.

@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commdlg.h>
+#include <wchar.h>
 #include <process.h>
 #else
 #include <unistd.h>
@@ -47,4 +48,29 @@ const char *pl_unique_token(void) {
 #endif
     snprintf(result, sizeof result, "%llx-%lx-%lx", (unsigned long long)time(NULL), pid, ++counter);
     return result;
+}
+
+const char *pl_pick_backup(void) {
+#ifdef _WIN32
+    static wchar_t filename[32768];
+    static char utf8[131072];
+    wcscpy(filename, L"Powerlaunch-backup.zip");
+    OPENFILENAMEW dialog = {0};
+    dialog.lStructSize = sizeof dialog;
+    dialog.hwndOwner = GetForegroundWindow();
+    dialog.lpstrTitle = L"Export library backup (choose a new filename)";
+    dialog.lpstrFilter = L"ZIP library backup\0*.zip\0\0";
+    dialog.lpstrDefExt = L"zip";
+    dialog.lpstrFile = filename;
+    dialog.nMaxFile = sizeof filename / sizeof filename[0];
+    dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_DONTADDTORECENT;
+    if (!GetSaveFileNameW(&dialog)) return "";
+    if (!WideCharToMultiByte(CP_UTF8, 0, filename, -1, utf8, sizeof utf8, NULL, NULL)) return "";
+    return utf8;
+#else
+    const char *patterns[] = {"*.zip"};
+    const char *result = tinyfd_saveFileDialog("Export library backup (choose a new filename)",
+        "Powerlaunch-backup.zip", 1, patterns, "ZIP library backup");
+    return result ? result : "";
+#endif
 }

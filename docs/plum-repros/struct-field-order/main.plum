@@ -1,0 +1,5 @@
+struct Example { count: Int, label: String, enabled: Bool }
+let main (): Unit = {
+    let value = Example { count: 0, enabled: false, label: "ready" };
+    assert_eq(value.label, "ready")
+}

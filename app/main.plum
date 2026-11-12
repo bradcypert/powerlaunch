@@ -6,6 +6,7 @@ use diagnostics;
 use workflow as flow;
 use storage;
 use clipboard;
+use backup;
 
 let message (s: workflow.State) (text: String): workflow.State = workflow.State { status: text, ..s }
 
@@ -74,9 +75,11 @@ let draw_navigation (s: workflow.State): workflow.State = {
     let all = action(s, 100, "All games", 16, 132, 156, 44, NavigationButton, !s.favorites && s.screen == LibraryScreen);
     let favorites = action(s, 101, "Favorites", 16, 184, 156, 44, NavigationButton, s.favorites && s.screen == LibraryScreen);
     let add = action(s, 102, "+ Add game", 16, 264, 156, 44, StandardButton, false);
+    let export = action(s, 103, "Back up library", 16, 320, 156, 44, StandardButton, false);
     ui.text(s.lib.games.len().to_string().concat(" games"), 26, ui.height(()) - 78, HintText, ui.muted(()));
     ui.text("On your computer", 26, ui.height(()) - 50, Caption, ui.muted(()));
-    if add { flow.request(s, AddGame) }
+    if export { flow.request(s, ShowBackup) }
+    else if add { flow.request(s, AddGame) }
     else if all || favorites {
         flow.request(flow.refresh(workflow.State { favorites: favorites, ..s }), ShowLibrary)
     } else { s }
@@ -292,17 +295,21 @@ let draw_editor (s: workflow.State): workflow.State = {
     else { next }
 }
 
-let focus_ids (s: workflow.State): Array[Int] =
+let focus_ids (s: workflow.State) (export: backup.Session): Array[Int] =
     if flow.confirming(s) { [900, 901, 902] }
     else if s.dropdown != 0 {
         let ids: Array[Int] = [];
         for i in 0..menu_items(s).len() { ids = ids.push(700 + i); };
         ids
     }
-    else if s.screen == LibraryScreen { [100, 101, 102, 0, 110, 111, 300] }
-    else if s.screen == DetailsScreen { [100, 101, 102, 200, 201, 202, 203, 204, 205] }
+    else if s.screen == BackupScreen {
+        if backup.active(export) { if export.progress.stage == Ready { [402, 403] } else { [403] } }
+        else { if s.store.writable { [100, 101, 102, 103, 400, 404, 401, 402] } else { [100, 101, 102, 103, 400] } }
+    }
+    else if s.screen == LibraryScreen { [100, 101, 102, 103, 0, 110, 111, 300] }
+    else if s.screen == DetailsScreen { [100, 101, 102, 103, 200, 201, 202, 203, 204, 205] }
     else {
-        let ids = [100, 101, 102, 210, 211, 212, 215, 216, 1, 2, 213, 5, 6, 7, 8, 3];
+        let ids = [100, 101, 102, 103, 210, 211, 212, 215, 216, 1, 2, 213, 5, 6, 7, 8, 3];
         for i in 0..s.draft.arguments.len() { ids = ids.push(1000 + i).push(2000 + i); };
         ids.push(214)
     }
@@ -315,8 +322,8 @@ let editor_focus_y (focus: Int) (args: Int): Int =
     else if focus >= 2000 && focus < 2256 { 640 + (focus - 2000) * 52 }
     else if focus == 214 { 640 + args * 52 } else { -1 }
 
-let keyboard (s: workflow.State): workflow.State = {
-    let ids = focus_ids(s);
+let keyboard (s: workflow.State) (export: backup.Session): workflow.State = {
+    let ids = focus_ids(s, export);
     let at = Array.index_of(ids, s.focus).unwrap_or(0);
     if s.dropdown != 0 && ui.key(256) { workflow.State { dropdown: 0, focus: if s.dropdown == 1 { 110 } else { 111 }, ..s } }
     else if s.dropdown != 0 && (ui.key(264) || ui.key(265) || ui.key(258)) {
@@ -349,9 +356,10 @@ let keyboard (s: workflow.State): workflow.State = {
                 else if sy + row_height(()) > s.scroll + ui.height(()) - 218 { sy + row_height(()) - (ui.height(()) - 218) }
                 else { s.scroll }, ..s }
         }
-    } else if !flow.confirming(s) && ui.key(256) {
+    } else if s.screen == BackupScreen && backup.active(export) { s }
+    else if !flow.confirming(s) && ui.key(256) {
         if flow.editing(s) { flow.request(s, CancelEditor) }
-        else if s.screen == DetailsScreen { flow.request(s, ShowLibrary) }
+        else if s.screen == DetailsScreen || s.screen == BackupScreen { flow.request(s, ShowLibrary) }
         else { workflow.State { focus: 300, ..s } }
     } else { s }
 }
@@ -376,25 +384,100 @@ let draw_confirmation (s: workflow.State): workflow.State = {
     } else { s }
 }
 
-let loop (s: workflow.State) (loader: desktop.CoverLoader): Unit =
+struct BackupView { state: workflow.State, export: backup.Session }
+let backup_heading (stage: backup.Stage): String = match stage {
+    Idle => "Choose where to save your backup",
+    Checking => "Checking referenced artwork",
+    Ready => "Ready to export",
+    Writing => "Writing backup",
+    Verifying => "Verifying backup",
+    Completed => "Backup saved and verified",
+    Failed => "Backup could not be completed",
+    Cancelled => "Backup cancelled",
+}
+let draw_backup (s: workflow.State) (export: backup.Session): BackupView = {
+    let busy = backup.active(export);
+    ui.enable(!busy);
+    let back = action(s, 400, "< Library", 220, 28, 120, 36, QuietButton, false);
+    ui.enable(true);
+    ui.text("Library backup", 220, 98, PageTitle, ui.ink(()));
+    ui.text("Includes saved game metadata and all referenced managed covers.", 220, 154, BodyText, ui.ink(()));
+    ui.text("Excludes game installations, saves, thumbnails and temporary drafts.", 220, 184, BodyText, ui.muted(()));
+    ui.text("Existing backup files are never replaced. Choose a new filename.", 220, 214, HintText, ui.muted(()));
+    ui.text("Backup file", 220, 260, FieldLabel, ui.muted(()));
+    ui.enable(!busy && s.store.writable);
+    let path = if busy {
+        ui.round_rect(220, 286, ui.width(()) - 252, 38, ui.surface(()));
+        ui.clip(232, 286, ui.width(()) - 276, 38);
+        ui.text(export.progress.path, 232, 297, BodyText, ui.muted(()));
+        ui.unclip(());
+        export.progress.path
+    } else { ui.field(404, export.progress.path, 220, 286, ui.width(()) - 450, 38, s.focus == 404) };
+    let choose = if busy { false } else { action(s, 401, "Choose file...", ui.width(()) - 214, 286, 182, 38, StandardButton, false) };
+    ui.enable(true);
+    let current = backup.set_path(export, path);
+    let acc = if ui.clicked(220, 286, ui.width(()) - 450, 38) && !busy { workflow.State { focus: 404, ..s } } else { s };
+    let selected = if choose { platform.pick_backup(()) } else { "" };
+    let edited = if selected != "" { backup.set_path(current, selected) } else { current };
+    let info = edited.progress;
+    ui.text(if edited.cancel_requested { "Cancelling backup..." } else { backup_heading(info.stage) }, 220, 362, DialogTitle, ui.ink(()));
+    ui.text((if busy || info.stage == Completed { info.games } else { s.lib.games.len() }).to_string().concat(" games")
+        .concat(if busy || info.stage == Completed { " / ".concat(info.covers.to_string()).concat(" unique covers") } else { "" }),
+        220, 405, BodyText, ui.muted(()));
+    if busy && info.stage != Ready && info.total > 0 {
+        let percentage = Int.min(100, info.done * 100 / info.total);
+        ui.rect(220, 442, ui.width(()) - 252, 8, ui.surface(()));
+        ui.rect(220, 442, (ui.width(()) - 252) * percentage / 100, 8, ui.accent(()));
+        ui.text(if info.stage == Checking { info.done.to_string().concat(" / ").concat(info.total.to_string()).concat(" covers checked") }
+            else { percentage.to_string().concat("%") }, 220, 464, HintText, ui.muted(()));
+    };
+    ui.clip(220, 498, ui.width(()) - 252, ui.height(()) - 644);
+    let lines = ui.paragraph(if !s.store.writable { "Backup is unavailable while the library requires recovery. The original data has been preserved." }
+        else if info.stage == Ready { "Review the content summary above. Start backup to create and verify the ZIP." }
+        else { info.message }, 220, 498, ui.width(()) - 252, BodyText,
+        if info.stage == Failed || !s.store.writable { ui.warning(()) } else { ui.muted(()) });
+    ui.unclip(());
+    let bottom = ui.height(()) - 116;
+    ui.enable(s.store.writable && !edited.cancel_requested && ((!busy && info.path.trim() != "") || info.stage == Ready));
+    let start = action(acc, 402, if info.stage == Ready { "Start backup" } else { "Review backup" }, 220, bottom, 186, 42, PrimaryButton, false);
+    ui.enable(busy && !edited.cancel_requested);
+    let cancel = action(acc, 403, "Cancel backup", 424, bottom, 164, 42, StandardButton, false) || (busy && ui.key(256));
+    ui.enable(true);
+    let next = if cancel { backup.cancel(edited) }
+        else if start && info.stage == Ready { backup.confirm(edited) }
+        else if start { backup.start(s.store.root, s.lib, info.path.trim()) }
+        else { edited };
+    BackupView { state: if back { flow.request(acc, ShowLibrary) } else { acc }, export: next }
+}
+
+let loop (s: workflow.State) (loader: desktop.CoverLoader) (export: backup.Session): Unit =
     if s.quit || ui.done(()) {
         let cleanup = storage.release_artwork(s.artwork, UnchangedArtwork);
+        backup.shutdown(export);
         ui.stop_cover_loader(loader);
         ui.close(())
     }
     else {
+        let current_export = backup.pump(export);
         ui.pump_covers(loader);
         ui.begin(());
-        let closed = if ui.close_requested(()) { flow.request(s, CloseLauncher) } else { s };
-        let keys = keyboard(closed);
-        ui.enable(!flow.confirming(keys));
+        let focused = if s.screen == BackupScreen && current_export.progress.stage == Ready && export.progress.stage != Ready {
+            workflow.State { focus: 402, ..s }
+        } else { s };
+        let closed = if ui.close_requested(()) { flow.request(focused, CloseLauncher) } else { focused };
+        let keys = keyboard(closed, current_export);
+        ui.enable(!flow.confirming(keys) && !backup.active(current_export));
         let navigation = draw_navigation(keys);
-        let content = if navigation.screen == LibraryScreen { draw_grid(navigation) }
-            else if navigation.screen == DetailsScreen { draw_detail(navigation) } else { draw_editor(navigation) };
+        ui.enable(!flow.confirming(keys));
+        let rendered = if navigation.screen == BackupScreen { draw_backup(navigation, current_export) }
+            else { BackupView { state: if navigation.screen == LibraryScreen { draw_grid(navigation) }
+                else if navigation.screen == DetailsScreen { draw_detail(navigation) } else { draw_editor(navigation) }, export: current_export } };
+        let content = rendered.state;
         ui.rect(188, ui.height(()) - 52, ui.width(()) - 188, 52, ui.canvas(()));
         ui.clip(220, ui.height(()) - 42, ui.width(()) - 252, 36);
         ui.text(if content.status != "" { content.status } else if flow.dirty(content) { "Unsaved changes" }
             else if content.screen == LibraryScreen { "Tab to the library. Arrow keys browse. Enter opens a game." }
+            else if content.screen == BackupScreen { "Backups contain saved library metadata and artwork." }
             else if content.screen == DetailsScreen { "Your game runs independently of Powerlaunch." } else { "Ctrl+S saves. Escape returns." },
             220, ui.height(()) - 32, FieldLabel, if !content.store.writable { ui.warning(()) } else { ui.muted(()) });
         ui.unclip(());
@@ -406,13 +489,13 @@ let loop (s: workflow.State) (loader: desktop.CoverLoader): Unit =
             Err(e) => message(next, "Could not remove the temporary pasted cover: ".concat(e)),
         };
         ui.end(());
-        loop(released, loader)
+        loop(released, loader, rendered.export)
     }
 
 let start (root: String): Unit = {
     let opened = storage.open(root);
     ui.init(());
-    loop(flow.initial(opened.lib, opened.store, opened.error), ui.start_cover_loader(root))
+    loop(flow.initial(opened.lib, opened.store, opened.error), ui.start_cover_loader(root), backup.idle(()))
 }
 
 let desktop_main (): Unit = match platform.data_root(()) {

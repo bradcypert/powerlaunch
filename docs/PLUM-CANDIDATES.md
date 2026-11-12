@@ -104,3 +104,33 @@ string/equality helper. See the [minimal reproduction](plum-repros/channel-owned
 Powerlaunch uses a direct handle channel with one outstanding request instead,
 retaining deterministic destruction. This is a compiler correctness candidate,
 not evidence of a runtime ownership failure. No issue filed yet.
+
+## New candidate: atomic publication without replacing an existing path
+
+Backup export stages and validates its ZIP beside the destination, then needs an
+atomic publish that fails if the final name exists, including a race after review.
+`Os.rename_file` replaces existing files, which cannot express this contract.
+The small `pl_publish_new` adapter uses a Windows non-replacing move or Linux
+`RENAME_NOREPLACE`, with an atomic hard-link fallback where supported. No ordinary
+replacing rename or cross-volume copy fallback is allowed. Backup ZIP writing,
+CRC and validation stay in Plum using existing streaming `Os.File` handles.
+
+A reusable no-replace rename/publish operation with distinct AlreadyExists errors
+would remove this C edge and complement the existing create-new write candidate.
+The native save-file dialog is another reusable desktop-package concern. No new
+Plum issue or sibling-repository change was made for this work.
+
+## Backup validation: two minimized Plum 0.0.41 runtime/compiler defects
+
+- [File.read task-exit cleanup](plum-repros/file-read-task/README.md): three
+  short-lived tasks with explicit File.close leak 393,216 bytes of native TLS
+  scratch allocation under LSan; the main-thread control exits cleanly. A small
+  owned streaming-reader adapter works around this until runtime cleanup is fixed.
+- [Struct literal field placement](plum-repros/struct-field-order/README.md): a
+  reordered literal checks/builds, then crashes when a boolean slot is read as a
+  String. The declaration-order control succeeds. Constructing backup records in
+  declaration order avoids the issue.
+
+These were discovered by the new headless sanitizer and real-input UI tests.
+No new upstream issues or Plum source changes have been made. The application
+fixtures keep both ownership and UI regression coverage.

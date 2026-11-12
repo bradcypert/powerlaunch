@@ -11,3 +11,5 @@ if __name__ == "__main__":
     subprocess.run([sys.executable, "tests/clipboard_integration.py"], cwd=ROOT, env=env, check=True)
 
     subprocess.run([sys.executable, "tests/cover_worker.py"], cwd=ROOT, env=env, check=True)
+
+    subprocess.run([sys.executable, "tests/backup_integration.py"], cwd=ROOT, env=env, check=True)

@@ -125,6 +125,23 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 On Windows, `python3 scripts/package_windows.py` builds the artifact folder after
 compilation. `python3 scripts/smoke_windows.py` checks that packaged application.
 
+## Back up the library
+
+Choose **Back up library** in the sidebar, then choose/type a new absolute ZIP
+filename. **Review backup** checks the saved records and referenced covers;
+**Start backup** writes and verifies the archive before publishing it. The screen
+shows progress and offers cancellation. Existing destination files are never
+replaced, including files created after review. A missing/unreadable cover fails
+the export so an incomplete backup cannot be mistaken for a complete one.
+
+Backups contain saved metadata and referenced managed artwork. Game installations,
+saves, thumbnails and temporary drafts are excluded. Unsaved edits use the usual
+Save/Discard/Keep editing flow before opening backup. An empty library can be
+backed up. ZIP32 export is limited to less than 4 GiB and 65,532 unique covers.
+The ZIP is unencrypted and retains the paths/arguments in your metadata.
+Restore/migration UI is a separate upcoming feature. See [backup format and failure
+behavior](docs/BACKUP.md).
+
 ## Memory checks and Plum integration
 
 ```sh

@@ -1,0 +1,216 @@
+use Os;
+use platform;
+
+// ZIP32, stored entries, UTF-8 names. Source: PKWARE APPNOTE 6.3.10.
+// Only our own freshly written archive is validated here; this is not an importer.
+struct Entry { name: String, size: Int, crc: Int, offset: Int }
+struct Input { name: String, path: String, data: Bytes, size: Int }
+
+let le (value: Int) (count: Int): Bytes = {
+    let bytes: Array[Int] = [];
+    for i in 0..count { bytes = bytes.push((value >> (i * 8)) & 255); };
+    Bytes.from_array(bytes)
+}
+let local_header (e: Entry): Bytes = {
+    let bytes = le(67324752, 4).concat(le(20, 2)).concat(le(2048, 2))
+        .concat(le(0, 2)).concat(le(0, 2)).concat(le(33, 2))
+        .concat(le(e.crc, 4)).concat(le(e.size, 4)).concat(le(e.size, 4))
+        .concat(le(e.name.as_bytes().len(), 2)).concat(le(0, 2));
+    bytes.concat(e.name.as_bytes())
+}
+let central_header (e: Entry): Bytes =
+    le(33639248, 4).concat(le(20, 2)).concat(le(20, 2)).concat(le(2048, 2))
+        .concat(le(0, 2)).concat(le(0, 2)).concat(le(33, 2))
+        .concat(le(e.crc, 4)).concat(le(e.size, 4)).concat(le(e.size, 4))
+        .concat(le(e.name.as_bytes().len(), 2)).concat(le(0, 2)).concat(le(0, 2))
+        .concat(le(0, 2)).concat(le(0, 2)).concat(le(0, 4)).concat(le(e.offset, 4))
+        .concat(e.name.as_bytes())
+let end_record (count: Int) (size: Int) (offset: Int): Bytes =
+    le(101010256, 4).concat(le(0, 2)).concat(le(0, 2)).concat(le(count, 2))
+        .concat(le(count, 2)).concat(le(size, 4)).concat(le(offset, 4)).concat(le(0, 2))
+
+let crc_table (): Array[Int] = {
+    let table: Array[Int] = [];
+    for i in 0..256 {
+        let crc = i;
+        for bit in 0..8 { crc = if (crc & 1) == 1 { (crc >> 1) ^ 3988292384 } else { crc >> 1 }; };
+        table = table.push(crc);
+    };
+    table
+}
+let crc_update (table: Array[Int]) (crc: Int) (bytes: Bytes): Int = {
+    let value = crc;
+    for i in 0..bytes.len() { value = (value >> 8) ^ table[(value ^ bytes.at(i).unwrap_or(0)) & 255]; };
+    value
+}
+
+let write_all (file: Os.File) (bytes: Bytes) (control: Control): Result[Unit, String] = {
+    let remaining = control.write_allowance.get();
+    if remaining >= 0 && bytes.len() > remaining { Err("Injected backup write failure.") }
+    else {
+        if remaining >= 0 { control.write_allowance.set(remaining - bytes.len()); };
+        match file.write(bytes) {
+            Err(e) => Err(e),
+            Ok(n) => if n <= 0 && bytes.len() > 0 { Err("Backup write made no progress.") }
+                else if n < bytes.len() { write_all(file, bytes.slice(n, bytes.len()), control) }
+                else { Ok(()) },
+        }
+    }
+}
+let read_exact (file: platform.Reader) (size: Int) (acc: Bytes): Result[Bytes, String] =
+    if acc.len() == size { Ok(acc) }
+    else { match file.read(Int.min(65536, size - acc.len())) {
+        Err(e) => Err(e),
+        Ok(bytes) => if bytes.is_empty() { Err("Backup ended unexpectedly.") }
+            else { read_exact(file, size, acc.concat(bytes)) },
+    } }
+
+let advance (control: Control) (bytes: Int) (name: String): Result[Unit, String] = {
+    control.done.set(control.done.get() + bytes);
+    if control.done.get() - control.last_report.get() >= 1048576 {
+        control.last_report.set(control.done.get());
+        checkpoint(control, control.stage.get(), name)
+    } else { Ok(()) }
+}
+// Iteration matters here: recursive Result callbacks retain prior byte buffers
+// until the chain unwinds, making peak memory proportional to a large cover.
+let copy_disk (source: platform.Reader) (dest: Os.File) (size: Int) (initial_crc: Int) (name: String) (c: Control): Result[Int, String] = {
+    let remaining = size;
+    let crc = initial_crc;
+    let error = "";
+    for part in 0..((size + 65535) / 65536) {
+        if error == "" {
+            let wanted = Int.min(65536, remaining);
+            match source.read(wanted) {
+                Err(e) => { error = e; },
+                Ok(bytes) => if bytes.len() != wanted { error = "Cover changed during backup: ".concat(name); }
+                    else {
+                        let written = Result.and_then(write_all(dest, bytes, c), |ignored| advance(c, bytes.len(), name));
+                        match written { Err(e) => { error = e; }, Ok(_) => {
+                            crc = crc_update(c.table, crc, bytes); remaining = remaining - bytes.len();
+                        } };
+                    },
+            };
+        };
+    };
+    if error != "" { Err(error) }
+    else { Result.and_then(source.read(1), |extra|
+        if extra.is_empty() { Ok(crc) } else { Err("Cover changed during backup: ".concat(name)) }) }
+}
+let copy_inline (bytes: Bytes) (dest: Os.File) (offset: Int) (initial_crc: Int) (name: String) (c: Control): Result[Int, String] = {
+    let crc = initial_crc;
+    let error = "";
+    for part in 0..((bytes.len() - offset + 65535) / 65536) {
+        if error == "" {
+            let start = offset + part * 65536;
+            let chunk = bytes.slice(start, Int.min(bytes.len(), start + 65536));
+            let written = Result.and_then(write_all(dest, chunk, c), |ignored| advance(c, chunk.len(), name));
+            match written { Err(e) => { error = e; }, Ok(_) => { crc = crc_update(c.table, crc, chunk); } };
+        };
+    };
+    if error == "" { Ok(crc) } else { Err(error) }
+}
+let write_entry (file: Os.File) (input: Input) (c: Control): Result[Entry, String] =
+    Result.and_then(file.seek(0, Current), |offset| {
+        let entry = Entry { name: input.name, size: input.size, crc: 0, offset: offset };
+        Result.and_then(write_all(file, local_header(entry), c), |ignored| {
+            let copied = if input.path == "" { copy_inline(input.data, file, 0, 4294967295, input.name, c) }
+                else { Result.and_then(platform.open_reader(input.path), |source| copy_disk(source, file, input.size, 4294967295, input.name, c)) };
+            Result.and_then(copied, |crc| {
+                let complete = Entry { crc: crc ^ 4294967295, ..entry };
+                Result.and_then(file.seek(offset, Start), |ignored|
+                    Result.and_then(write_all(file, local_header(complete), c), |ignored|
+                        Result.and_then(file.seek(0, End), |ignored|
+                            Result.map(checkpoint(c, Writing, input.name), |ignored| complete))))
+            })
+        })
+    })
+let write_entries (file: Os.File) (inputs: Array[Input]) (index: Int) (entries: Array[Entry]) (c: Control): Result[Array[Entry], String] = {
+    let collected = entries;
+    let error = "";
+    for i in index..inputs.len() {
+        if error == "" { match write_entry(file, inputs[i], c) {
+            Err(e) => { error = e; }, Ok(entry) => { collected = collected.push(entry); },
+        }; };
+    };
+    if error == "" { Ok(collected) } else { Err(error) }
+}
+let write_central (file: Os.File) (entries: Array[Entry]) (index: Int) (c: Control): Result[Unit, String] = {
+    let error = "";
+    for i in index..entries.len() {
+        if error == "" { match write_all(file, central_header(entries[i]), c) { Err(e) => { error = e; }, Ok(_) => () }; };
+    };
+    if error == "" { Ok(()) } else { Err(error) }
+}
+let write_zip (path: String) (inputs: Array[Input]) (c: Control): Result[Array[Entry], String] =
+    Result.and_then(Os.open(path, Write), |file|
+        Result.and_then(write_entries(file, inputs, 0, [], c), |entries|
+            Result.and_then(file.seek(0, Current), |offset|
+                Result.and_then(write_central(file, entries, 0, c), |ignored|
+                    Result.and_then(file.seek(0, Current), |end|
+                        Result.and_then(write_all(file, end_record(entries.len(), end - offset, offset), c), |ignored|
+                            Result.map(file.close(), |ignored| entries)))))))
+
+let expect_bytes (file: platform.Reader) (expected: Bytes): Result[Unit, String] =
+    Result.and_then(read_exact(file, expected.len(), Bytes.empty(())), |actual|
+        if actual == expected { Ok(()) } else { Err("Backup verification failed: archive metadata differs.") })
+let verify_payload (file: platform.Reader) (size: Int) (initial_crc: Int) (name: String) (c: Control): Result[Int, String] = {
+    let remaining = size;
+    let crc = initial_crc;
+    let error = "";
+    for part in 0..((size + 65535) / 65536) {
+        if error == "" {
+            let wanted = Int.min(65536, remaining);
+            match file.read(wanted) {
+                Err(e) => { error = e; },
+                Ok(bytes) => if bytes.len() != wanted { error = "Backup verification failed: incomplete file ".concat(name); }
+                    else { match advance(c, bytes.len(), name) { Err(e) => { error = e; }, Ok(_) => {
+                        crc = crc_update(c.table, crc, bytes); remaining = remaining - bytes.len();
+                    } }; },
+            };
+        };
+    };
+    if error == "" { Ok(crc ^ 4294967295) } else { Err(error) }
+}
+let verify_entries (file: platform.Reader) (entries: Array[Entry]) (index: Int) (c: Control): Result[Unit, String] = {
+    let error = "";
+    for i in index..entries.len() {
+        if error == "" {
+            let entry = entries[i];
+            let checked = Result.and_then(expect_bytes(file, local_header(entry)), |ignored|
+                Result.and_then(verify_payload(file, entry.size, 4294967295, entry.name, c), |crc|
+                    if crc != entry.crc { Err("Backup verification failed: checksum differs for ".concat(entry.name)) }
+                    else { checkpoint(c, Verifying, entry.name) }));
+            match checked { Err(e) => { error = e; }, Ok(_) => () };
+        };
+    };
+    if error == "" { Ok(()) } else { Err(error) }
+}
+let verify_central (file: platform.Reader) (entries: Array[Entry]) (index: Int): Result[Unit, String] = {
+    let error = "";
+    for i in index..entries.len() {
+        if error == "" { match expect_bytes(file, central_header(entries[i])) { Err(e) => { error = e; }, Ok(_) => () }; };
+    };
+    if error == "" { Ok(()) } else { Err(error) }
+}
+let verify_zip (path: String) (entries: Array[Entry]) (c: Control): Result[Unit, String] =
+    Result.and_then(platform.open_reader(path), |file|
+        Result.and_then(verify_entries(file, entries, 0, c), |ignored|
+            Result.and_then(file.position(), |offset|
+                Result.and_then(verify_central(file, entries, 0), |ignored|
+                    Result.and_then(file.position(), |end|
+                        Result.and_then(expect_bytes(file, end_record(entries.len(), end - offset, offset)), |ignored|
+                            Result.and_then(file.read(1), |extra|
+                                if extra.is_empty() { Ok(()) } else { Err("Backup verification failed: trailing data.") })))))))
+
+
+pub let test_backup_crc_matches_standard_vector (): Unit = {
+    assert_eq(crc_update(crc_table(()), 4294967295, "123456789".as_bytes()) ^ 4294967295, 3421780262);
+    assert_eq(crc_update(crc_table(()), 4294967295, Bytes.empty(())) ^ 4294967295, 0)
+}
+
+pub let test_backup_zip32_limits_are_checked_before_writing (): Unit = {
+    let too_large = Input { name: "artwork/large.png", path: "not-read", data: Bytes.empty(()), size: 4294967294 };
+    assert(validate_plan([too_large]).is_err());
+    assert(validate_plan([Input { name: "library.json", path: "", data: Bytes.empty(()), size: 0 }]).is_ok())
+}

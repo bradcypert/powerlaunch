@@ -1,3 +1,10 @@
+#if defined(__linux__)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#endif
+#include <stdio.h>
+
 /* A create-new write: never replaces an existing user file, including races. */
 #include <errno.h>
 #include <fcntl.h>
@@ -52,4 +59,32 @@ long long pl_write_new(const char *path, const char *bytes, long long length) {
     if (offset != length || closed) unlink(path);
 #endif
     return offset == length && closed == 0 ? 0 : 2;
+}
+
+/* Publish only within one filesystem, without replacing an existing name.
+ * The caller owns and cleans the staging source after this operation. */
+long long pl_publish_new(const char *source, const char *destination) {
+#ifdef _WIN32
+    int sn = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, source, -1, NULL, 0);
+    int dn = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destination, -1, NULL, 0);
+    if (!sn || !dn) return 2;
+    wchar_t *sw = calloc((size_t)sn, sizeof *sw), *dw = calloc((size_t)dn, sizeof *dw);
+    if (!sw || !dw) { free(sw); free(dw); return 2; }
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, source, -1, sw, sn) ||
+        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, destination, -1, dw, dn)) {
+        free(sw); free(dw); return 2;
+    }
+    int result = MoveFileExW(sw, dw, MOVEFILE_WRITE_THROUGH) ? 0 :
+        (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS ? 1 : 2);
+    free(sw); free(dw); return result;
+#else
+#ifdef __linux__
+    if (renameat2(AT_FDCWD, source, AT_FDCWD, destination, RENAME_NOREPLACE) == 0) return 0;
+    if (errno != ENOSYS && errno != EINVAL && errno != EOPNOTSUPP) return errno == EEXIST ? 1 : 2;
+#endif
+    /* Safe fallback when no-replace rename is unavailable. No copy/delete or
+     * ordinary replacing rename fallback is allowed. */
+    if (link(source, destination) == 0) return 0;
+    return errno == EEXIST ? 1 : 2;
+#endif
 }

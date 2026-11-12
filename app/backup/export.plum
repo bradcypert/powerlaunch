@@ -1,0 +1,189 @@
+use library;
+use platform;
+use Os;
+use Json;
+use Path;
+
+pub enum Stage { Idle, Checking, Ready, Writing, Verifying, Completed, Failed, Cancelled }
+pub struct Progress { pub stage: Stage, pub done: Int, pub total: Int, pub games: Int,
+    pub covers: Int, pub path: String, pub message: String }
+struct Control { commands: Receiver[Bool], events: Sender[Progress], done: Ref[Int],
+    last_report: Ref[Int], total: Ref[Int], stage: Ref[Stage], games: Int, covers: Int,
+    destination: String, table: Array[Int], write_allowance: Ref[Int] }
+struct Job { commands: Sender[Bool], events: Receiver[Progress], task: Task[Unit] }
+pub struct Session { job: Option[Job], pub progress: Progress, pub cancel_requested: Bool }
+
+pub let idle (): Session = Session { job: None,
+    progress: Progress { stage: Idle, done: 0, total: 0, games: 0, covers: 0, path: "", message: "" }, cancel_requested: false }
+pub let active (s: Session): Bool = s.job.is_some()
+let report (c: Control) (stage: Stage) (message: String): Progress = Progress {
+    stage: stage, done: c.done.get(), total: c.total.get(), games: c.games,
+    covers: c.covers, path: c.destination, message: message }
+// One event, one acknowledgement. Neither channel accumulates image/file data
+// or unbounded progress messages. Only the worker owns streaming file handles.
+let checkpoint (c: Control) (stage: Stage) (message: String): Result[Unit, String] = {
+    let sent = c.events.send(report(c, stage, message));
+    if sent.is_ok() && c.commands.recv().unwrap_or(false) { Ok(()) } else { Err("Backup cancelled.") }
+}
+let cover_names (lib: library.Library): Array[String] = {
+    let names: Array[String] = [];
+    let seen: Set[String] = Set.new(());
+    for game in lib.games {
+        if game.cover != "" && !Set.contains(seen, game.cover) {
+            seen = Set.insert(seen, game.cover); names = names.push(game.cover);
+        };
+    };
+    Array.sort_by(names, |a,b| a <= b)
+}
+let manifest (games: Int) (covers: Int): Result[String, String] = json_stringify(JsonObject([
+    JsonEntry { key: "format", value: JsonString("powerlaunch-library-backup") },
+    JsonEntry { key: "version", value: JsonNumber(1.0) },
+    JsonEntry { key: "library", value: JsonString("library.json") },
+    JsonEntry { key: "library_schema_version", value: JsonNumber(1.0) },
+    JsonEntry { key: "games", value: JsonNumber(games.to_float()) },
+    JsonEntry { key: "covers", value: JsonNumber(covers.to_float()) },
+    JsonEntry { key: "excluded", value: JsonArray(Array.map(["game installations", "game saves", "thumbnails", "temporary drafts"], |s| JsonString(s))) },
+]))
+let inline_input (name: String) (text: String): Input = Input { name: name, path: "", data: text.as_bytes(), size: text.as_bytes().len() }
+let plan_covers (root: String) (names: Array[String]) (index: Int) (inputs: Array[Input]) (c: Control): Result[Array[Input], String] = {
+    let planned = inputs;
+    let error = "";
+    for i in index..names.len() {
+        if error == "" {
+            let name = names[i];
+            let path = root.concat("/artwork/").concat(name);
+            let inspected = Result.and_then(checkpoint(c, Checking, name), |ignored| Os.stat(path));
+            match inspected {
+                Err(e) => { error = e; },
+                Ok(info) => if info.is_directory { error = "Expected a cover file: ".concat(name); }
+                    else if info.size < 0 || info.size >= 4294967295 { error = "Cover is too large for this backup format: ".concat(name); }
+                    else {
+                        c.done.set(i + 1);
+                        planned = planned.push(Input { name: "artwork/".concat(name), path: path, data: Bytes.empty(()), size: info.size });
+                    },
+            };
+        };
+    };
+    if error == "" { Ok(planned) } else { Err(error) }
+}
+let build_plan (root: String) (lib: library.Library) (names: Array[String]) (c: Control): Result[Array[Input], String] =
+    Result.and_then(library.encode(lib), |json|
+        Result.and_then(library.decode(json), |validated|
+            Result.and_then(manifest(lib.games.len(), names.len()), |description|
+                if names.len() > 65532 { Err("Too many artwork files for ZIP32 backup (maximum 65,532).") }
+                else { plan_covers(root, names, 0, [inline_input("backup.json", description), inline_input("library.json", json)], c) })))
+let payload_size (inputs: Array[Input]): Int = {
+    let size = 0;
+    for input in inputs { size = size + input.size; };
+    size
+}
+let validate_plan (inputs: Array[Input]): Result[Unit, String] = {
+    let size = 22;
+    let valid = true;
+    for input in inputs {
+        let name_size = input.name.as_bytes().len();
+        if name_size > 65535 { valid = false; };
+        size = size + input.size + 76 + 2 * name_size;
+    };
+    if !valid || size >= 4294967295 { Err("Backup exceeds the ZIP32 size/name limits (archive must be smaller than 4 GiB).") }
+    else { Ok(()) }
+}
+let export_staged (staging: String) (inputs: Array[Input]) (c: Control): Result[Unit, String] = {
+    let path = staging.concat("/backup.zip");
+    c.done.set(0); c.last_report.set(0); c.stage.set(Writing);
+    Result.and_then(checkpoint(c, Writing, "Writing library and artwork"), |ignored|
+        Result.and_then(write_zip(path, inputs, c), |entries| {
+            c.done.set(0); c.last_report.set(0); c.stage.set(Verifying);
+            Result.and_then(checkpoint(c, Verifying, "Checking archive contents"), |ignored|
+                Result.and_then(verify_zip(path, entries, c), |ignored|
+                    Result.and_then(checkpoint(c, Verifying, "Ready to publish verified backup"), |ignored|
+                        platform.publish_new(path, c.destination))))
+        }))
+}
+let export_plan (staging: String) (inputs: Array[Input]) (c: Control): Result[String, String] =
+    Result.and_then(validate_plan(inputs), |ignored| {
+        c.done.set(0); c.total.set(payload_size(inputs));
+        Result.and_then(checkpoint(c, Ready, "Includes saved metadata and all referenced managed artwork."), |ignored|
+            Result.and_then(Os.make_dir(staging), |ignored| {
+                let result = export_staged(staging, inputs, c);
+                let cleanup = Os.remove_tree(staging);
+                match result {
+                    Err(e) => Err(e.concat(match cleanup { Ok(_) => "", Err(_) => " Temporary files could not be removed: ".concat(staging) })),
+                    // Publication already succeeded; cleanup failure is a notice,
+                    // not a claim that the valid final archive is incomplete.
+                    Ok(_) => Ok(match cleanup { Ok(_) => "Backup saved and verified.",
+                        Err(_) => "Backup saved. Temporary cleanup failed: ".concat(staging) }),
+                }
+            }))
+    })
+let worker (root: String) (lib: library.Library) (staging: String) (c: Control): Unit = {
+    let result = if c.destination.contains("\u{0000}") || !Path.is_absolute(c.destination) {
+        Err("Choose an absolute backup filename.")
+    } else { Result.and_then(Os.exists(c.destination), |exists|
+        if exists { Err("Destination already exists. Choose a new backup filename.") }
+        else { Result.and_then(build_plan(root, lib, cover_names(lib), c), |inputs| export_plan(staging, inputs, c)) }) };
+    let progress = match result {
+        Ok(message) => report(c, Completed, message),
+        Err(e) => report(c, if e.starts_with("Backup cancelled.") { Cancelled } else { Failed }, e),
+    };
+    let sent = c.events.send(progress);
+}
+let start_config (root: String) (lib: library.Library) (destination: String) (allowance: Int): Session = {
+    let path = if destination.to_lower().ends_with(".zip") { destination } else { destination.concat(".zip") };
+    let staging = platform.parent(path).concat("/.powerlaunch-backup-").concat(platform.unique_token(())).concat(".partial");
+    let (send_commands, commands) = channel[Bool]();
+    let (events, receive_events) = channel[Progress]();
+    let covers = cover_names(lib).len();
+    let task = spawn {
+        let control = Control { commands: commands, events: events, done: ref(0), last_report: ref(0),
+            total: ref(covers), stage: ref(Checking), games: lib.games.len(), covers: covers,
+            destination: path, table: crc_table(()), write_allowance: ref(allowance) };
+        worker(root, lib, staging, control)
+    };
+    Session { job: Some(Job { commands: send_commands, events: receive_events, task: task }),
+        progress: Progress { stage: Checking, done: 0, total: covers, games: lib.games.len(), covers: covers, path: path, message: "Checking referenced artwork" }, cancel_requested: false }
+}
+pub let start (root: String) (lib: library.Library) (path: String): Session = start_config(root, lib, path, -1)
+pub let pump (s: Session): Session = match s.job {
+    None => s,
+    Some(job) => {
+        let ready = select { event = job.events => event, else => None };
+        match ready {
+            None => s,
+            Some(progress) => if progress.stage == Completed || progress.stage == Failed || progress.stage == Cancelled {
+                job.task.join(); Session { job: None, progress: progress, cancel_requested: false }
+            } else {
+                if progress.stage != Ready || s.cancel_requested { let sent = job.commands.send(!s.cancel_requested); };
+                Session { progress: progress, ..s }
+            },
+        }
+    },
+}
+pub let confirm (s: Session): Session = match s.job {
+    Some(job) => if s.progress.stage == Ready && !s.cancel_requested {
+        let sent = job.commands.send(true);
+        Session { progress: Progress { stage: Writing, message: "Writing backup", ..s.progress }, ..s }
+    } else { s },
+    None => s,
+}
+pub let cancel (s: Session): Session = {
+    if !s.cancel_requested && s.progress.stage == Ready { match s.job { Some(job) => { let sent = job.commands.send(false); }, None => () }; };
+    Session { cancel_requested: true, ..s }
+}
+pub let shutdown (s: Session): Unit = match s.job {
+    None => (),
+    Some(job) => { let sent = job.commands.send(false); job.task.join(); },
+}
+
+pub let set_path (s: Session) (path: String): Session =
+    if active(s) || path == s.progress.path { s }
+    else { Session { progress: Progress { stage: Idle, path: path, message: "", ..s.progress }, ..s } }
+
+pub let test_backup_idle_progress_and_path_edit (): Unit = {
+    let initial = idle(());
+    assert(!active(initial));
+    assert_eq(initial.progress.path, "");
+    assert_eq(initial.progress.stage, Idle);
+    let refreshed = pump(initial);
+    assert_eq(set_path(refreshed, "/tmp/example.zip").progress.path, "/tmp/example.zip")
+}

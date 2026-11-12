@@ -166,3 +166,42 @@ source pixels before the 16-megapixel acceptance check. The disposable disk
 cache has no automatic pruning yet. These limits do not bound total process,
 compressed source, driver, or disk memory. Windows CI exercises the headless
 worker and packaged app; real Windows scrolling remains a manual follow-up.
+
+## Backup export ownership checks (2026-11-12)
+
+The backup fixture repeatedly exports/verifies a 2 MiB binary cover plus a small
+second cover and three records, with shared-reference deduplication. It includes
+empty export, controller polling/confirmation, cancellation in each phase, queued
+review cancellation, injected output failure, corrupt output, missing/changed
+sources, a publication race and close/join. The initial full-failure unsanitized run completed
+in 1.074 seconds with a sampled 9,101,312-byte peak RSS (~8.7 MiB). This is the
+headless exporter process, not the graphical application or a large-library bound.
+Metadata/entry records remain resident; source/artifact payload reads use 64 KiB
+chunks. Native reader counts return to zero after the fixture.
+
+ASan/LSan initially exposed Plum 0.0.41's per-thread File.read scratch buffer leak.
+A standalone three-task reproduction reports 393,216 leaked bytes, while the
+main-thread control passes. The small owned-reader workaround releases its FILE
+and buffer on drop; the full graphics-free sanitizer workload then passes without
+suppressions. Its backup fixture ran in 1.917 seconds at a sampled 563,302,400-byte
+RSS (~537 MiB), including ASan's substantial allocation/quarantine overhead.
+These measurements do not imply ordinary backups use that much RAM.
+
+The real-input UI test also exercises review-before-start, export, Escape cancel
+and window close while a worker waits at review; optional OS checkpoints are
+saved to `build/backup-ui-memory.json`. Those points are not continuous peaks or
+proof of leak freedom. Format constraints and crash/cancellation limits are in
+`BACKUP.md`; minimized runtime/compiler findings are in `PLUM-CANDIDATES.md`.
+
+A separate 64 MiB single-export workload caught application-level retention in
+recursive Result callbacks: prior chunks stayed alive until each file finished.
+That run peaked at 72,957,952 bytes RSS (~69.6 MiB). Replacing payload, verification
+and entry traversal recursion with loops reduced the same workload to
+4,612,096 bytes (~4.4 MiB), with independent ZIP/extraction validation still
+passing in 4.1 seconds. This was object lifetime across callbacks, not an
+unreachable-allocation leak. Linux CI now runs this large fixture normally and
+requires sampled RSS below a conservative 32 MiB regression threshold. Metadata
+size and platform/runtime differences still affect total memory.
+
+Run it with `POWERLAUNCH_BACKUP_LARGE_MIB=64 mise exec -- python3 tests/backup_integration.py`.
+ASan/LSan continues to cover the smaller complete fault matrix separately.
