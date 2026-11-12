@@ -58,9 +58,15 @@ let test_cancel_before_ready_delivery (): Unit = {
 }
 
 pub let check_backup_fixture (): Unit = {
-    let root = Os.env_var("POWERLAUNCH_BACKUP_FIXTURE").unwrap_or("");
-    let source_json = Os.read_file(root.concat("/library.json")).unwrap_or("");
-    let lib = library.decode(source_json).unwrap_or(library.empty(()));
+    let base = Os.env_var("POWERLAUNCH_BACKUP_FIXTURE").unwrap_or("");
+    assert(base != "");
+    let root = base.concat("/Café library");
+    let source_json = match Os.read_file(root.concat("/library.json")) {
+        Ok(text) => text, Err(e) => { println(e); assert(false); "" },
+    };
+    let lib = match library.decode(source_json) {
+        Ok(value) => value, Err(e) => { println(e); assert(false); library.empty(()) },
+    };
     assert_eq(lib.games.len(), 3);
     assert_eq(cover_names(lib).len(), 2);
     assert_eq(drive(root, lib, "Café backup.zip", Idle, 0, -1, false, false).stage, Completed);

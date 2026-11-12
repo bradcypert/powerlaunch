@@ -39,7 +39,9 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-backup-', dir=ROOT / 'build
         game['arguments'] = ['', 'two words', 'literal;$(nothing)']
     (data / 'library.json').write_text(json.dumps(original), encoding='utf-8')
     env, options = environment()
-    env['POWERLAUNCH_BACKUP_FIXTURE'] = str(data)
+    # Pass an ASCII root across the Windows CRT environment boundary; the
+    # Plum fixture appends the Unicode child so Unicode file I/O is still tested.
+    env['POWERLAUNCH_BACKUP_FIXTURE'] = str(directory)
     output = ROOT / 'build' / (directory.name + '-check' + ('.exe' if os.name == 'nt' else ''))
     subprocess.run([PLUM, 'build', str(project.relative_to(ROOT)), '-o', str(output.relative_to(ROOT)), *options], env=env, cwd=ROOT, check=True)
     log_path = ROOT / 'build/backup-integration.log'
