@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-backup-', dir=ROOT / 'build
     for name in ('drafts', 'thumbnails-v1', 'game files', 'saves'):
         (data / name).mkdir()
         (data / name / 'excluded').write_bytes(b'not backup content')
-    original = json.loads((data / 'library.json').read_text())
+    original = json.loads((data / 'library.json').read_text(encoding='utf-8'))
     for i, game in enumerate(original['games']):
         game['cover'] = list(covers)[i % 2]
         game['title'] = f'Café game {i}'
@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='powerlaunch-backup-', dir=ROOT / 'build
             assert archive.read('artwork/' + name) == content
         restored = directory / 'independent extraction'
         archive.extractall(restored)
-        assert json.loads((restored / 'library.json').read_text()) == original
+        assert json.loads((restored / 'library.json').read_text(encoding='utf-8')) == original
     with zipfile.ZipFile(data / 'empty.zip') as archive:
         assert archive.testzip() is None
         assert set(archive.namelist()) == {'backup.json', 'library.json'}
